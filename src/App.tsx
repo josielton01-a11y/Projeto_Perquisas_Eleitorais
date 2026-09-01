@@ -68,10 +68,7 @@ const nav = [
   ["Território & cotas", MapPinned],
   ["Mapa de cobertura", Map],
   ["Equipe & rotas", Users],
-  ["Auditoria", ShieldCheck],
   ["Relatórios", ChartNoAxesCombined],
-  ["Simulações", SlidersHorizontal],
-  ["Cadastros", Database],
   ["Permissões", UserRoundCheck],
 ] as const;
 const localities = [
