@@ -812,6 +812,13 @@ function Territory({ act, adminToken }: { act: (message: string) => void; adminT
       act("Localidade cadastrada");
     }
   };
+  const deleteStreet = async (street: (typeof territoryStreets)[number]) => {
+    if (!window.confirm(`Excluir o logradouro “${street.name}”? Esta ação não pode ser desfeita.`)) return;
+    const { data, error } = await supabase.rpc("pulso_admin_delete_street", { p_token: adminToken, p_id: street.id });
+    if (error || !data?.ok) return act("Não foi possível excluir o logradouro. Execute a nova atualização do banco.");
+    setTerritoryStreets((current) => current.filter((item) => item.id !== street.id));
+    act("Logradouro excluído");
+  };
   const areas = useMemo(
     () => [
       "Todos",
@@ -913,6 +920,7 @@ function Territory({ act, adminToken }: { act: (message: string) => void; adminT
             <span>CEP</span>
             <span>LATITUDE</span>
             <span>LONGITUDE</span>
+            <span>AÇÕES</span>
           </div>
           {filtered.slice(0, 30).map((s) => (
             <div className="streetRow" key={s.id}>
@@ -926,6 +934,7 @@ function Territory({ act, adminToken }: { act: (message: string) => void; adminT
               <span>{s.cep || "Não informado"}</span>
               <span>{s.latitude?.toFixed(7) || "Não disponível"}</span>
               <span>{s.longitude?.toFixed(7) || "Não disponível"}</span>
+              <span><button className="streetDelete" onClick={() => void deleteStreet(s)} title="Excluir logradouro"><Trash2 /></button></span>
             </div>
           ))}
         </div>

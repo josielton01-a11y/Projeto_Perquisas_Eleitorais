@@ -1317,6 +1317,7 @@ textarea.agentAnswerInput {
   color: #1b1d22;
 }
 .territoryRegister{margin-bottom:18px;padding:22px}.territoryType{display:flex;gap:8px;margin:16px 0}.territoryRegisterGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.territoryRegisterGrid label{font-size:11px;font-weight:700;color:#60646c}.territoryRegisterGrid input,.territoryRegisterGrid select{display:block;width:100%;margin-top:6px;border:1px solid #d9dce1;border-radius:9px;padding:11px 12px;background:#fff;outline:0}.territoryRegisterGrid input:focus,.territoryRegisterGrid select:focus{border-color:#bd9130;box-shadow:0 0 0 3px #c99c3520}.territoryRegisterGrid label:first-child{grid-column:span 2}.localityFields{grid-template-columns:2fr 1fr}.territorySave{margin-top:16px}@media(max-width:800px){.territoryRegisterGrid,.localityFields{grid-template-columns:1fr 1fr}.territoryRegisterGrid label:first-child{grid-column:span 2}}@media(max-width:520px){.territoryRegisterGrid,.localityFields{grid-template-columns:1fr}.territoryRegisterGrid label:first-child{grid-column:span 1}.territoryType{flex-direction:column}}
+.streetDelete{width:34px;height:34px;border:1px solid #ead6d6;border-radius:8px;background:#fff7f7;color:#a13d3d;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.streetDelete:hover{background:#a13d3d;color:#fff}.streetDelete svg{width:16px;height:16px}
 .streetTools {
   padding: 18px 20px;
   display: flex;
@@ -1363,7 +1364,7 @@ textarea.agentAnswerInput {
 }
 .streetRow {
   display: grid;
-  grid-template-columns: minmax(230px, 1.7fr) minmax(120px, 0.8fr) minmax(140px, 0.8fr) minmax(90px, 0.55fr) minmax(105px, 0.6fr) minmax(105px, 0.6fr);
+  grid-template-columns: minmax(230px, 1.7fr) minmax(120px, 0.8fr) minmax(140px, 0.8fr) minmax(90px, 0.55fr) minmax(105px, 0.6fr) minmax(105px, 0.6fr) 58px;
   gap: 18px;
   align-items: center;
   min-width: 960px;
@@ -1424,13 +1425,14 @@ textarea.agentAnswerInput {
     flex: 1;
   }
   .streetRow {
-    grid-template-columns: minmax(190px, 1.5fr) minmax(110px, 0.8fr) minmax(105px, 0.7fr) minmax(105px, 0.7fr);
+    grid-template-columns: minmax(190px, 1.5fr) minmax(110px, 0.8fr) minmax(105px, 0.7fr) minmax(105px, 0.7fr) 48px;
     min-width: 590px;
   }
   .streetRow > span:nth-child(3),
   .streetRow > span:nth-child(4) {
     display: none;
   }
+  .streetRow > span:nth-child(7) { display:flex; justify-content:center; }
 }
 .researchHeader {
   display: flex;
