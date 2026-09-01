@@ -1055,23 +1055,8 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
 }
 
 function Researches({ act, adminToken }: { act: (x: string) => void; adminToken: string }) {
-  const [items, setItems] = useState<Research[]>(() => {
-    try {
-      return (
-        JSON.parse(localStorage.getItem("pulso-research") || "null") ||
-        seedResearch
-      );
-    } catch {
-      return seedResearch;
-    }
-  });
-  const [questions, setQuestions] = useState<Question[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("pulso-question-bank") || "null") || seedQuestions;
-    } catch {
-      return seedQuestions;
-    }
-  });
+  const [items, setItems] = useState<Research[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
   const [cargos, setCargos] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("pulso-cargos") || "null") || defaultCargos;
@@ -1181,9 +1166,12 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   };
   useEffect(() => {
     supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{
-      if(data?.researches?.length) setItems(data.researches);
-      else void supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: items, p_questions: questions });
-      if(Array.isArray(data?.questions)) setQuestions(data.questions);
+      const nextResearches = Array.isArray(data?.researches) ? data.researches : [];
+      const nextQuestions = Array.isArray(data?.questions) ? data.questions : [];
+      setItems(nextResearches);
+      setQuestions(nextQuestions);
+      localStorage.setItem("pulso-research", JSON.stringify(nextResearches));
+      localStorage.setItem("pulso-question-bank", JSON.stringify(nextQuestions));
     });
   }, [adminToken]);
   const syncState = (nextItems: Research[], nextQuestions = questions) => supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: nextItems, p_questions: nextQuestions });
@@ -4425,36 +4413,12 @@ function AgentApp({
   online: boolean;
   act: (x: string) => void;
 }) {
-  const [researches, setResearches] = useState<Research[]>(() => {
-    try {
-      return (
-        JSON.parse(localStorage.getItem("pulso-research") || "null") ||
-        seedResearch
-      );
-    } catch {
-      return seedResearch;
-    }
-  });
-  const [bank, setBank] = useState<Question[]>(() => {
-    try {
-      return (
-        JSON.parse(localStorage.getItem("pulso-question-bank") || "null") ||
-        seedQuestions
-      );
-    } catch {
-      return seedQuestions;
-    }
-  });
+  const [researches, setResearches] = useState<Research[]>([]);
+  const [bank, setBank] = useState<Question[]>([]);
   const [session, setSession] = useState<{
     researchId: number;
     agentId: string;
-  } | null>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("pulso-agent-session") || "null");
-    } catch {
-      return null;
-    }
-  });
+  } | null>(null);
   const [loginForm, setLoginForm] = useState({ login: "", password: "" });
   const [locality, setLocality] = useState("");
   const [stepIndex, setStepIndex] = useState(0);
@@ -4472,7 +4436,7 @@ function AgentApp({
   const login = async () => {
     const { data, error } = await supabase.rpc("pulso_agent_login", { p_login: loginForm.login.trim(), p_password: loginForm.password });
     if (!error && data?.research) {
-      setResearches([data.research]); setBank(data.questions || seedQuestions);
+      setResearches([data.research]); setBank(data.questions || []);
       const next = { researchId: data.research.id, agentId: data.agent.id };
       setSession(next); localStorage.setItem("pulso-agent-session", JSON.stringify(next));
       act(`Bem-vindo(a), ${data.agent.name.split(" ")[0]}`); return;
