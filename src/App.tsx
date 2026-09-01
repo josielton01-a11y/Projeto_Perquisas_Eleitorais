@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import streetsRaw from "../dados_entrada/ruas_bonito_geocodificadas.csv?raw";
 import streetCoordinates from "./data/streetCoordinates.json";
+import { supabase } from "./lib/supabase";
 import {
   MapContainer,
   TileLayer,
@@ -288,7 +289,7 @@ export function App() {
   const [agentMode, setAgentMode] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState("");
-  const [adminToken, setAdminToken] = useState(() => localStorage.getItem("pulso-admin-token") || "");
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem("pulso-supabase-admin-token") || "");
   const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
   useEffect(() => {
     localStorage.setItem("pulso-nav", collapsed ? "1" : "0");
@@ -327,10 +328,9 @@ export function App() {
     setTimeout(() => setToast(""), 2500);
   };
   const loginAdmin = async () => {
-    const response = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(adminLogin) });
-    if (!response.ok) return act("Usuário ou senha inválidos");
-    const data = await response.json();
-    localStorage.setItem("pulso-admin-token", data.token);
+    const { data, error } = await supabase.rpc("pulso_admin_login", { p_username: adminLogin.username, p_password: adminLogin.password });
+    if (error || !data?.token) return act("Usuário ou senha inválidos");
+    localStorage.setItem("pulso-supabase-admin-token", data.token);
     setAdminToken(data.token);
   };
   if (agentMode)
@@ -1157,9 +1157,9 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     setCreating(true);
   };
   useEffect(() => {
-    fetch("/api/admin/state", { headers: { Authorization: `Bearer ${adminToken}` } }).then(r=>r.ok?r.json():null).then(data=>{ if(data?.researches) setItems(data.researches); if(data?.questions) setQuestions(data.questions); });
+    supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{ if(data?.researches) setItems(data.researches); if(data?.questions) setQuestions(data.questions); });
   }, [adminToken]);
-  const syncState = (nextItems: Research[], nextQuestions = questions) => fetch("/api/admin/state", { method:"PUT", headers:{"Content-Type":"application/json",Authorization:`Bearer ${adminToken}`}, body:JSON.stringify({researches:nextItems,questions:nextQuestions}) });
+  const syncState = (nextItems: Research[], nextQuestions = questions) => supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: nextItems, p_questions: nextQuestions });
   const save = (next: Research[]) => {
     setItems(next);
     localStorage.setItem("pulso-research", JSON.stringify(next));
@@ -4443,9 +4443,8 @@ function AgentApp({
     localStorage.setItem("pulso-research", JSON.stringify(next));
   };
   const login = async () => {
-    const response = await fetch("/api/agent/login", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(loginForm) });
-    if (response.ok) {
-      const data = await response.json();
+    const { data, error } = await supabase.rpc("pulso_agent_login", { p_login: loginForm.login.trim(), p_password: loginForm.password });
+    if (!error && data?.research) {
       setResearches([data.research]); setBank(data.questions || seedQuestions);
       const next = { researchId: data.research.id, agentId: data.agent.id };
       setSession(next); localStorage.setItem("pulso-agent-session", JSON.stringify(next));
