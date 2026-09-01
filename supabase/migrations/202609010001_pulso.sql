@@ -12,7 +12,7 @@ alter table public.pulso_sessions enable row level security;
 alter table public.pulso_agent_accesses enable row level security;
 revoke all on public.pulso_state, public.pulso_admins, public.pulso_sessions, public.pulso_agent_accesses from anon, authenticated;
 
-create or replace function public.pulso_admin_login(p_username text,p_password text) returns jsonb language plpgsql security definer set search_path=public as $$
+create or replace function public.pulso_admin_login(p_username text,p_password text) returns jsonb language plpgsql security definer set search_path=public,extensions as $$
 declare v_token text;
 begin
   if not exists(select 1 from pulso_admins where username=p_username and password_hash=crypt(p_password,password_hash)) then return null; end if;
@@ -21,13 +21,13 @@ begin
   return jsonb_build_object('token',v_token);
 end $$;
 
-create or replace function public.pulso_admin_get_state(p_token text) returns jsonb language plpgsql security definer set search_path=public as $$
+create or replace function public.pulso_admin_get_state(p_token text) returns jsonb language plpgsql security definer set search_path=public,extensions as $$
 begin
   if not exists(select 1 from pulso_sessions where token_hash=encode(digest(p_token,'sha256'),'hex') and expires_at>now()) then raise exception 'unauthorized'; end if;
   return jsonb_build_object('researches',coalesce((select value from pulso_state where key='researches'),'[]'::jsonb),'questions',coalesce((select value from pulso_state where key='questions'),'[]'::jsonb));
 end $$;
 
-create or replace function public.pulso_admin_sync_state(p_token text,p_researches jsonb,p_questions jsonb) returns jsonb language plpgsql security definer set search_path=public as $$
+create or replace function public.pulso_admin_sync_state(p_token text,p_researches jsonb,p_questions jsonb) returns jsonb language plpgsql security definer set search_path=public,extensions as $$
 declare r jsonb; a jsonb; safe_researches jsonb;
 begin
   if not exists(select 1 from pulso_sessions where token_hash=encode(digest(p_token,'sha256'),'hex') and expires_at>now()) then raise exception 'unauthorized'; end if;
@@ -40,7 +40,7 @@ begin
   return jsonb_build_object('ok',true);
 end $$;
 
-create or replace function public.pulso_agent_login(p_login text,p_password text) returns jsonb language plpgsql security definer set search_path=public as $$
+create or replace function public.pulso_agent_login(p_login text,p_password text) returns jsonb language plpgsql security definer set search_path=public,extensions as $$
 declare access pulso_agent_accesses; researches jsonb; research jsonb; agent jsonb; questions jsonb;
 begin
   select * into access from pulso_agent_accesses where login=p_login and password_hash=crypt(p_password,password_hash) and not blocked; if not found then return null; end if;

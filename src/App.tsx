@@ -64,6 +64,7 @@ import "./question-editor.css";
 const nav = [
   ["Visão geral", LayoutDashboard],
   ["Pesquisas", ClipboardList],
+  ["Banco de perguntas", FileText],
   ["Território & cotas", MapPinned],
   ["Mapa de cobertura", Map],
   ["Equipe & rotas", Users],
@@ -642,6 +643,7 @@ function Dashboard({
 
 function Module({ page, act, adminToken }: { page: string; act: (x: string) => void; adminToken: string }) {
   if (page === "Pesquisas") return <Researches act={act} adminToken={adminToken} />;
+  if (page === "Banco de perguntas") return <QuestionBank adminToken={adminToken} act={act} />;
   if (page === "Território & cotas") return <Territory />;
   if (page === "Mapa de cobertura") return <CoverageMap />;
   const Icon = nav.find((x) => x[0] === page)?.[1] || Building2;
@@ -961,6 +963,7 @@ type Question = {
   type: string;
   vars: string[];
   options?: string[];
+  eliminatory?: boolean;
 };
 const closedQuestionTypes = ["Escolha única", "Múltipla escolha", "Escala"];
 const seedQuestions: Question[] = [
@@ -1030,6 +1033,26 @@ const resolveQuestion = (
         .join(value || `[${variableLabels[key] || key}]`),
     text,
   );
+
+function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string) => void }) {
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [researches, setResearches] = useState<Research[]>([]);
+  const [draft, setDraft] = useState({ text: "", type: "Texto aberto", options: ["", ""], eliminatory: false });
+  useEffect(() => { supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{ setQuestions(data?.questions || []); setResearches(data?.researches || []); }); }, [adminToken]);
+  const persist = async (next: Question[]) => {
+    const { error } = await supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: researches, p_questions: next });
+    if (error) return act("Não foi possível salvar a pergunta");
+    setQuestions(next); act("Banco de perguntas atualizado");
+  };
+  const add = () => {
+    const options = draft.type === "Múltipla escolha" ? draft.options.map(x=>x.trim()).filter(Boolean) : undefined;
+    if (!draft.text.trim()) return act("Digite o texto da pergunta");
+    if (draft.type === "Múltipla escolha" && (!options || options.length < 2)) return act("Informe pelo menos duas opções");
+    const question: Question = { id: `Q${Date.now()}`, block: "Geral", text: draft.text.trim(), type: draft.type, vars: [], options, eliminatory: draft.eliminatory };
+    void persist([...questions, question]); setDraft({ text:"", type:"Texto aberto", options:["",""], eliminatory:false });
+  };
+  return <div className="content questionBankPage"><div className="moduleHero"><div className="bigIcon"><FileText/></div><div><p className="eyebrow">QUESTIONÁRIO</p><h1>Banco de perguntas</h1><p>Cadastre as perguntas que poderão ser utilizadas nas pesquisas.</p></div><div className="territoryCount"><b>{questions.length}</b><span>perguntas</span></div></div><section className="panel questionRegister"><h3>Nova pergunta</h3><label>Texto da pergunta<textarea value={draft.text} onChange={e=>setDraft({...draft,text:e.target.value})} placeholder="Digite a pergunta..."/></label><div className="questionRegisterGrid"><label>Tipo de resposta<select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value})}><option>Texto aberto</option><option>Múltipla escolha</option></select></label><label className="checkLabel"><input type="checkbox" checked={draft.eliminatory} onChange={e=>setDraft({...draft,eliminatory:e.target.checked})}/> Pergunta eliminatória</label></div>{draft.type==="Múltipla escolha"&&<div className="optionRegister"><b>Opções de resposta</b>{draft.options.map((option,index)=><div key={index}><input value={option} onChange={e=>{const options=[...draft.options];options[index]=e.target.value;setDraft({...draft,options})}} placeholder={`Opção ${index+1}`}/>{draft.options.length>2&&<button onClick={()=>setDraft({...draft,options:draft.options.filter((_,i)=>i!==index)})}>×</button>}</div>)}<button className="secondary" onClick={()=>setDraft({...draft,options:[...draft.options,""]})}><Plus/> Adicionar opção</button></div>}<button className="primary" onClick={add}><CheckCircle2/> Salvar pergunta</button></section><section className="panel questionList"><h3>Perguntas cadastradas</h3>{!questions.length?<p className="agentHint">Nenhuma pergunta cadastrada.</p>:questions.map(q=><article key={q.id}><div><b>{q.text}</b><span>{q.type}{q.eliminatory?" · Eliminatória":""}</span>{q.options?.length?<small>{q.options.join(" • ")}</small>:null}</div><button className="icon" onClick={()=>void persist(questions.filter(x=>x.id!==q.id))}><Trash2/></button></article>)}</section></div>;
+}
 
 function Researches({ act, adminToken }: { act: (x: string) => void; adminToken: string }) {
   const [items, setItems] = useState<Research[]>(() => {
@@ -1160,7 +1183,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{
       if(data?.researches?.length) setItems(data.researches);
       else void supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: items, p_questions: questions });
-      if(data?.questions?.length) setQuestions(data.questions);
+      if(Array.isArray(data?.questions)) setQuestions(data.questions);
     });
   }, [adminToken]);
   const syncState = (nextItems: Research[], nextQuestions = questions) => supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: nextItems, p_questions: nextQuestions });
