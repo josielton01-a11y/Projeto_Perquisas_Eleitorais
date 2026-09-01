@@ -669,7 +669,7 @@ function Dashboard({
 function Module({ page, act, adminToken }: { page: string; act: (x: string) => void; adminToken: string }) {
   if (page === "Pesquisas") return <Researches act={act} adminToken={adminToken} />;
   if (page === "Banco de perguntas") return <QuestionBank adminToken={adminToken} act={act} />;
-  if (page === "Território & cotas") return <Territory />;
+  if (page === "Território & cotas") return <Territory act={act} adminToken={adminToken} />;
   if (page === "Mapa de cobertura") return <CoverageMap />;
   const Icon = nav.find((x) => x[0] === page)?.[1] || Building2;
   const cards: Record<string, string[]> = {
@@ -771,19 +771,57 @@ function Module({ page, act, adminToken }: { page: string; act: (x: string) => v
   );
 }
 
-function Territory() {
+function Territory({ act, adminToken }: { act: (message: string) => void; adminToken: string }) {
   const [query, setQuery] = useState("");
   const [area, setArea] = useState("Todos");
+  const [territoryStreets, setTerritoryStreets] = useState(streets);
+  const [localities, setLocalities] = useState<Array<{ id: number; name: string; type: string }>>([]);
+  const [registerType, setRegisterType] = useState<"logradouro" | "localidade">("logradouro");
+  const [streetDraft, setStreetDraft] = useState({ name: "", cep: "", district: "", neighborhood: "", development: "", latitude: "", longitude: "" });
+  const [localityDraft, setLocalityDraft] = useState({ name: "", type: "Bairro" });
+  useEffect(() => {
+    supabase.from("pulso_ruas").select("id,nome,cep,distrito,bairro,loteamento,latitude,longitude").order("id").then(({ data }) => {
+      if (data) setTerritoryStreets(data.map((row) => ({ id: Number(row.id), name: row.nome, cep: row.cep || "", district: row.distrito || "", neighborhood: row.bairro || "", development: row.loteamento || "", latitude: row.latitude, longitude: row.longitude })));
+    });
+    supabase.from("pulso_localidades").select("id,nome,tipo").order("nome").then(({ data }) => {
+      if (data) setLocalities(data.map((row) => ({ id: Number(row.id), name: row.nome, type: row.tipo })));
+    });
+  }, []);
+  const addTerritory = async () => {
+    if (registerType === "logradouro") {
+      if (!streetDraft.name.trim()) return act("Informe o nome do logradouro");
+      const { data, error } = await supabase.rpc("pulso_admin_add_street", {
+        p_token: adminToken, p_nome: streetDraft.name, p_cep: streetDraft.cep,
+        p_distrito: streetDraft.district, p_bairro: streetDraft.neighborhood,
+        p_loteamento: streetDraft.development,
+        p_latitude: streetDraft.latitude ? Number(streetDraft.latitude) : null,
+        p_longitude: streetDraft.longitude ? Number(streetDraft.longitude) : null,
+      });
+      if (error || !data) return act("Não foi possível cadastrar o logradouro. Execute a nova atualização do banco.");
+      const row = Array.isArray(data) ? data[0] : data;
+      setTerritoryStreets((current) => [...current, { id: Number(row.id), name: row.nome, cep: row.cep || "", district: row.distrito || "", neighborhood: row.bairro || "", development: row.loteamento || "", latitude: row.latitude, longitude: row.longitude }]);
+      setStreetDraft({ name: "", cep: "", district: "", neighborhood: "", development: "", latitude: "", longitude: "" });
+      act("Logradouro cadastrado");
+    } else {
+      if (!localityDraft.name.trim()) return act("Informe o nome da localidade");
+      const { data, error } = await supabase.rpc("pulso_admin_add_locality", { p_token: adminToken, p_nome: localityDraft.name, p_tipo: localityDraft.type });
+      if (error || !data) return act("Não foi possível cadastrar a localidade. Execute a nova atualização do banco.");
+      const row = Array.isArray(data) ? data[0] : data;
+      setLocalities((current) => [...current, { id: Number(row.id), name: row.nome, type: row.tipo }]);
+      setLocalityDraft({ name: "", type: "Bairro" });
+      act("Localidade cadastrada");
+    }
+  };
   const areas = useMemo(
     () => [
       "Todos",
       ...Array.from(
-        new Set(streets.map((s) => s.neighborhood).filter(Boolean)),
+        new Set([...territoryStreets.map((s) => s.neighborhood), ...localities.map((item) => item.name)].filter(Boolean)),
       ).sort(),
     ],
-    [],
+    [territoryStreets, localities],
   );
-  const filtered = streets.filter(
+  const filtered = territoryStreets.filter(
     (s) =>
       (area === "Todos" || s.neighborhood === area) &&
       `${s.name} ${s.cep} ${s.neighborhood} ${s.district} ${s.latitude ?? ""} ${s.longitude ?? ""}`
@@ -802,7 +840,7 @@ function Territory() {
           <p>Logradouros atuais importados da planilha publicada.</p>
         </div>
         <div className="territoryCount">
-          <b>{streets.length}</b>
+          <b>{territoryStreets.length}</b>
           <span>logradouros</span>
         </div>
       </div>
@@ -810,7 +848,7 @@ function Territory() {
         <article>
           <MapPin />
           <span>
-            <b>{streets.length}</b> nomes atuais
+            <b>{territoryStreets.length}</b> nomes atuais
           </span>
         </article>
         <article>
@@ -822,7 +860,7 @@ function Territory() {
         <article>
           <Map />
           <span>
-            <b>{new Set(streets.map((s) => s.district)).size}</b>{" "}
+            <b>{new Set(territoryStreets.map((s) => s.district).filter(Boolean)).size}</b>{" "}
             distritos/povoados
           </span>
         </article>
@@ -833,6 +871,23 @@ function Territory() {
           </span>
         </article>
       </div>
+      <section className="panel territoryRegister">
+        <div className="sectionTitle"><div><h3>Adicionar ao território</h3><p>Cadastre um novo logradouro ou uma localidade de Bonito.</p></div></div>
+        <div className="territoryType"><button className={registerType === "logradouro" ? "primary" : "secondary"} onClick={() => setRegisterType("logradouro")}>Logradouro</button><button className={registerType === "localidade" ? "primary" : "secondary"} onClick={() => setRegisterType("localidade")}>Localidade</button></div>
+        {registerType === "logradouro" ? <div className="territoryRegisterGrid">
+          <label>Nome do logradouro<input value={streetDraft.name} onChange={(e) => setStreetDraft({ ...streetDraft, name: e.target.value })} placeholder="Ex.: Rua Nova" /></label>
+          <label>CEP<input value={streetDraft.cep} onChange={(e) => setStreetDraft({ ...streetDraft, cep: e.target.value })} placeholder="00000-000" /></label>
+          <label>Bairro<input value={streetDraft.neighborhood} onChange={(e) => setStreetDraft({ ...streetDraft, neighborhood: e.target.value })} /></label>
+          <label>Distrito / povoado<input value={streetDraft.district} onChange={(e) => setStreetDraft({ ...streetDraft, district: e.target.value })} /></label>
+          <label>Loteamento<input value={streetDraft.development} onChange={(e) => setStreetDraft({ ...streetDraft, development: e.target.value })} /></label>
+          <label>Latitude<input type="number" step="any" value={streetDraft.latitude} onChange={(e) => setStreetDraft({ ...streetDraft, latitude: e.target.value })} /></label>
+          <label>Longitude<input type="number" step="any" value={streetDraft.longitude} onChange={(e) => setStreetDraft({ ...streetDraft, longitude: e.target.value })} /></label>
+        </div> : <div className="territoryRegisterGrid localityFields">
+          <label>Nome da localidade<input value={localityDraft.name} onChange={(e) => setLocalityDraft({ ...localityDraft, name: e.target.value })} placeholder="Ex.: Novo bairro" /></label>
+          <label>Tipo<select value={localityDraft.type} onChange={(e) => setLocalityDraft({ ...localityDraft, type: e.target.value })}><option>Bairro</option><option>Distrito</option><option>Povoado</option><option>Zona rural</option><option>Outra</option></select></label>
+        </div>}
+        <button className="primary territorySave" onClick={addTerritory}><Plus /> Salvar cadastro</button>
+      </section>
       <section className="panel streetPanel">
         <div className="streetTools">
           <label>

@@ -1316,6 +1316,7 @@ textarea.agentAnswerInput {
   font: 800 19px Manrope;
   color: #1b1d22;
 }
+.territoryRegister{margin-bottom:18px;padding:22px}.territoryType{display:flex;gap:8px;margin:16px 0}.territoryRegisterGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.territoryRegisterGrid label{font-size:11px;font-weight:700;color:#60646c}.territoryRegisterGrid input,.territoryRegisterGrid select{display:block;width:100%;margin-top:6px;border:1px solid #d9dce1;border-radius:9px;padding:11px 12px;background:#fff;outline:0}.territoryRegisterGrid input:focus,.territoryRegisterGrid select:focus{border-color:#bd9130;box-shadow:0 0 0 3px #c99c3520}.territoryRegisterGrid label:first-child{grid-column:span 2}.localityFields{grid-template-columns:2fr 1fr}.territorySave{margin-top:16px}@media(max-width:800px){.territoryRegisterGrid,.localityFields{grid-template-columns:1fr 1fr}.territoryRegisterGrid label:first-child{grid-column:span 2}}@media(max-width:520px){.territoryRegisterGrid,.localityFields{grid-template-columns:1fr}.territoryRegisterGrid label:first-child{grid-column:span 1}.territoryType{flex-direction:column}}
 .streetTools {
   padding: 18px 20px;
   display: flex;
