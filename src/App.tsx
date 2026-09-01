@@ -288,6 +288,8 @@ export function App() {
   const [agentMode, setAgentMode] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState("");
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem("pulso-admin-token") || "");
+  const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
   useEffect(() => {
     localStorage.setItem("pulso-nav", collapsed ? "1" : "0");
   }, [collapsed]);
@@ -324,10 +326,18 @@ export function App() {
     setToast(m);
     setTimeout(() => setToast(""), 2500);
   };
+  const loginAdmin = async () => {
+    const response = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(adminLogin) });
+    if (!response.ok) return act("Usuário ou senha inválidos");
+    const data = await response.json();
+    localStorage.setItem("pulso-admin-token", data.token);
+    setAdminToken(data.token);
+  };
   if (agentMode)
     return (
       <AgentApp back={() => setAgentMode(false)} online={online} act={act} />
     );
+  if (!adminToken) return <div className="adminLogin"><div className="adminLoginCard"><div className="mark">P</div><p className="eyebrow">ADMINISTRAÇÃO</p><h1>Entrar no Pulso</h1><label>Usuário<input value={adminLogin.username} onChange={e=>setAdminLogin({...adminLogin,username:e.target.value})}/></label><label>Senha<input type="password" value={adminLogin.password} onChange={e=>setAdminLogin({...adminLogin,password:e.target.value})}/></label><button className="primary" onClick={loginAdmin}>Entrar</button><button className="secondary" onClick={()=>setAgentMode(true)}>Acessar Pulso Campo</button>{toast&&<div className="toast">{toast}</div>}</div></div>;
   return (
     <div className="app">
       <aside
@@ -414,7 +424,7 @@ export function App() {
             act={act}
           />
         ) : (
-          <Module page={page} act={act} />
+          <Module page={page} act={act} adminToken={adminToken} />
         )}
       </main>
       {toast && (
@@ -630,8 +640,8 @@ function Dashboard({
   );
 }
 
-function Module({ page, act }: { page: string; act: (x: string) => void }) {
-  if (page === "Pesquisas") return <Researches act={act} />;
+function Module({ page, act, adminToken }: { page: string; act: (x: string) => void; adminToken: string }) {
+  if (page === "Pesquisas") return <Researches act={act} adminToken={adminToken} />;
   if (page === "Território & cotas") return <Territory />;
   if (page === "Mapa de cobertura") return <CoverageMap />;
   const Icon = nav.find((x) => x[0] === page)?.[1] || Building2;
@@ -1021,7 +1031,7 @@ const resolveQuestion = (
     text,
   );
 
-function Researches({ act }: { act: (x: string) => void }) {
+function Researches({ act, adminToken }: { act: (x: string) => void; adminToken: string }) {
   const [items, setItems] = useState<Research[]>(() => {
     try {
       return (
@@ -1134,13 +1144,31 @@ function Researches({ act }: { act: (x: string) => void }) {
   const [groupName, setGroupName] = useState("");
   const [groupSelection, setGroupSelection] = useState<string[]>([]);
   const [candidateDraft, setCandidateDraft] = useState({ office: "", name: "", supporter: "" });
+  const openCreateResearch = () => {
+    const year = new Date().getFullYear();
+    const highestNumber = items.reduce((highest, item) => {
+      const match = /^(\d+)\/(\d{4})$/.exec(item.number.trim());
+      return match && Number(match[2]) === year
+        ? Math.max(highest, Number(match[1]))
+        : highest;
+    }, 0);
+    const nextNumber = `${String(highestNumber + 1).padStart(3, "0")}/${year}`;
+    setForm((current) => ({ ...current, number: nextNumber }));
+    setCreating(true);
+  };
+  useEffect(() => {
+    fetch("/api/admin/state", { headers: { Authorization: `Bearer ${adminToken}` } }).then(r=>r.ok?r.json():null).then(data=>{ if(data?.researches) setItems(data.researches); if(data?.questions) setQuestions(data.questions); });
+  }, [adminToken]);
+  const syncState = (nextItems: Research[], nextQuestions = questions) => fetch("/api/admin/state", { method:"PUT", headers:{"Content-Type":"application/json",Authorization:`Bearer ${adminToken}`}, body:JSON.stringify({researches:nextItems,questions:nextQuestions}) });
   const save = (next: Research[]) => {
     setItems(next);
     localStorage.setItem("pulso-research", JSON.stringify(next));
+    void syncState(next);
   };
   const saveQuestions = (next: Question[]) => {
     setQuestions(next);
     localStorage.setItem("pulso-question-bank", JSON.stringify(next));
+    void syncState(items, next);
   };
   const saveCargos = (next: string[]) => {
     setCargos(next);
@@ -1968,7 +1996,7 @@ function Researches({ act }: { act: (x: string) => void }) {
             questionários.
           </p>
         </div>
-        <button className="primary" onClick={() => setCreating(true)}>
+        <button className="primary" onClick={openCreateResearch}>
           <Plus /> Criar nova pesquisa
         </button>
       </div>
@@ -4380,7 +4408,7 @@ function AgentApp({
       return seedResearch;
     }
   });
-  const [bank] = useState<Question[]>(() => {
+  const [bank, setBank] = useState<Question[]>(() => {
     try {
       return (
         JSON.parse(localStorage.getItem("pulso-question-bank") || "null") ||
@@ -4414,27 +4442,16 @@ function AgentApp({
     setResearches(next);
     localStorage.setItem("pulso-research", JSON.stringify(next));
   };
-  const login = () => {
-    const match = researches
-      .flatMap((r) => (r.agents || []).map((a) => ({ r, a })))
-      .find(
-        ({ a }) =>
-          a.login &&
-          a.login === loginForm.login.trim() &&
-          a.password === loginForm.password,
-      );
-    if (!match) {
-      act("Login ou senha inválidos");
-      return;
+  const login = async () => {
+    const response = await fetch("/api/agent/login", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(loginForm) });
+    if (response.ok) {
+      const data = await response.json();
+      setResearches([data.research]); setBank(data.questions || seedQuestions);
+      const next = { researchId: data.research.id, agentId: data.agent.id };
+      setSession(next); localStorage.setItem("pulso-agent-session", JSON.stringify(next));
+      act(`Bem-vindo(a), ${data.agent.name.split(" ")[0]}`); return;
     }
-    if (match.a.blocked) {
-      act("Este acesso está bloqueado. Fale com a coordenação.");
-      return;
-    }
-    const next = { researchId: match.r.id, agentId: match.a.id };
-    setSession(next);
-    localStorage.setItem("pulso-agent-session", JSON.stringify(next));
-    act(`Bem-vindo(a), ${match.a.name.split(" ")[0]}`);
+    act("Login ou senha inválidos");
   };
   const logout = () => {
     setSession(null);

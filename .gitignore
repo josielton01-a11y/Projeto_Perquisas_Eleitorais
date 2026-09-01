@@ -6,3 +6,4 @@ dist/
 *.tsbuildinfo
 *.tar.gz
 .sites-reference/
+.wrangler/
