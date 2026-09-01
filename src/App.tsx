@@ -423,6 +423,7 @@ export function App() {
             target={target}
             online={online}
             act={act}
+            adminToken={adminToken}
           />
         ) : (
           <Module page={page} act={act} adminToken={adminToken} />
@@ -443,12 +444,39 @@ function Dashboard({
   target,
   online,
   act,
+  adminToken,
 }: {
   completed: number;
   target: number;
   online: boolean;
   act: (x: string) => void;
+  adminToken: string;
 }) {
+  const [dashboardResearches, setDashboardResearches] = useState<Research[] | null>(null);
+  useEffect(() => {
+    supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({ data }) => {
+      setDashboardResearches(Array.isArray(data?.researches) ? data.researches : []);
+    });
+  }, [adminToken]);
+
+  if (dashboardResearches && dashboardResearches.length === 0) {
+    return (
+      <div className="content">
+        <div className="welcome">
+          <div><p className="eyebrow">PAINEL INICIAL</p><h1>Bom dia, Josielton.</h1><p>Nenhuma pesquisa cadastrada no momento.</p></div>
+          <div className="actions"><button className="primary" onClick={() => act("Abra a aba Pesquisas para criar uma nova rodada")}><Plus /> Nova rodada</button></div>
+        </div>
+        <section className="activeRound"><div><span className="live"><i /> SEM PESQUISA ATIVA</span><h2>Nenhuma pesquisa cadastrada</h2><p>Crie uma nova rodada para iniciar a coleta.</p></div></section>
+        <div className="stats">
+          <Stat label="Entrevistas concluídas" value="0" note="Nenhuma resposta registrada" />
+          <Stat label="Agentes em campo" value="0" note="Nenhum agente ativo" tone="gold" />
+          <Stat label="Pendentes de envio" value="0" note="Nenhum envio pendente" tone="light" />
+          <Stat label="Alertas de auditoria" value="0" note="Nenhum alerta" tone="warn" />
+        </div>
+        <section className="panel progressPanel"><div className="panelTitle"><div><span className="kicker">PROGRESSO GERAL</span><h3>Cobertura por localidade</h3></div></div><div className="progressBody"><Ring value={0} /><p>Nenhuma cota configurada.</p></div></section>
+      </div>
+    );
+  }
   return (
     <div className="content">
       <div className="welcome">
