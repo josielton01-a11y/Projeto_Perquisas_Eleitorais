@@ -1157,7 +1157,11 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     setCreating(true);
   };
   useEffect(() => {
-    supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{ if(data?.researches) setItems(data.researches); if(data?.questions) setQuestions(data.questions); });
+    supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{
+      if(data?.researches?.length) setItems(data.researches);
+      else void supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: items, p_questions: questions });
+      if(data?.questions?.length) setQuestions(data.questions);
+    });
   }, [adminToken]);
   const syncState = (nextItems: Research[], nextQuestions = questions) => supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: nextItems, p_questions: nextQuestions });
   const save = (next: Research[]) => {
