@@ -4,3 +4,4 @@ dist/
 .npm-cache/
 .localappdata/
 *.tsbuildinfo
+*.tar.gz

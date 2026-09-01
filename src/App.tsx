@@ -297,8 +297,19 @@ export function App() {
     addEventListener("online", a);
     addEventListener("offline", b);
     navigator.serviceWorker
-      ?.register("/sw.js", { updateViaCache: "none" })
-      .then((reg) => reg.update());
+      ?.getRegistrations()
+      .then((registrations) =>
+        Promise.all(registrations.map((registration) => registration.unregister())),
+      );
+    caches
+      ?.keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key.startsWith("pulso-"))
+            .map((key) => caches.delete(key)),
+        ),
+      );
     return () => {
       removeEventListener("online", a);
       removeEventListener("offline", b);
