@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { LocalityDistribution } from "./LocalityDistribution";
+import { buildLocalities, distributionValid, localityKey } from "./localities";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   LayoutDashboard,
   ClipboardList,
@@ -43,6 +46,7 @@ import {
   FileSpreadsheet,
   BarChart3,
   FileText,
+  LogOut,
 } from "lucide-react";
 import streetsRaw from "../dados_entrada/ruas_bonito_geocodificadas.csv?raw";
 import streetCoordinates from "./data/streetCoordinates.json";
@@ -71,20 +75,6 @@ const nav = [
   ["Relatórios", ChartNoAxesCombined],
   ["Permissões", UserRoundCheck],
 ] as const;
-const localities = [
-  ["Centro", 56, 70],
-  ["Boa Vista / Zé Batista", 34, 40],
-  ["Alto Bonito", 31, 36],
-  ["Cohab", 29, 34],
-  ["Cachoeira", 22, 28],
-  ["Área Rural", 18, 30],
-];
-const agents = [
-  ["Marina Silva", "Centro", "12", "Em campo"],
-  ["João Henrique", "Alto Bonito", "9", "Em campo"],
-  ["Carla Souza", "Cohab", "8", "Sincronizando"],
-  ["Rafael Lima", "Área Rural", "6", "Offline"],
-];
 
 function Stat({
   label,
@@ -166,18 +156,7 @@ const localityRows = parseCsv(streetsRaw).map((r, i) => ({
     longitude: r.LONGITUDE ? Number(r.LONGITUDE) : null,
   }));
 const streets = localityRows.filter((x) => x.name);
-const researchAreas = Array.from(
-  new Set(
-    localityRows
-      .map((street) => street.neighborhood || street.district)
-      .filter(Boolean),
-  ),
-)
-  .filter(Boolean)
-  .sort((a, b) => a.localeCompare(b, "pt-BR"));
-const hasNeighborhoodWithoutDistrict = localityRows.some(
-  (street) => street.neighborhood && !street.district,
-);
+const localityOptions = buildLocalities(localityRows);
 const titleCase = (value: string) =>
   value.toLocaleLowerCase("pt-BR").replace(/(^|\s)\S/g, (letter) =>
     letter.toLocaleUpperCase("pt-BR"),
@@ -195,28 +174,15 @@ const districtLabel = (district: string) => {
   if (district === "BENTIVI") return "Distrito de Bentivi";
   return `Povoado de ${titleCase(district)}`;
 };
-const macroAreas = Array.from(
-  new Set(
-    localityRows
-      .map((street) => street.district)
-      .filter(Boolean)
-      .map(districtLabel),
-  ),
-).concat([
-  ...(localityRows.some((street) => street.neighborhood === "ZONA RURAL")
-    ? ["Zona Rural"]
-    : []),
-  ...(hasNeighborhoodWithoutDistrict
-    ? ["Sem distrito/povoado informado"]
-    : []),
-]);
-const weightBase = Math.floor(100 / macroAreas.length);
-const defaultAreaWeights = Object.fromEntries(
-  macroAreas.map((area, index) => [
-    area,
-    weightBase + (index < 100 % macroAreas.length ? 1 : 0),
-  ]),
-);
+const sameLocality = (a: string, b: string) =>
+  (a || "").trim().toLocaleUpperCase("pt-BR") ===
+  (b || "").trim().toLocaleUpperCase("pt-BR");
+// Calculado uma única vez ao carregar o app — "hoje" não muda durante a
+// sessão, então recalcular a formatação (Intl) a cada render do Dashboard
+// era trabalho redundante.
+const todayLabel = new Date()
+  .toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })
+  .toUpperCase();
 const slugifyLogin = (name: string) =>
   name
     .normalize("NFD")
@@ -267,16 +233,7 @@ const downloadCsv = (
   link.click();
   URL.revokeObjectURL(url);
 };
-const areaMacro = (area: string) => {
-  if (area === "ZONA RURAL") return "Zona Rural";
-  const street = localityRows.find(
-    (item) =>
-      item.neighborhood === area ||
-      (!item.neighborhood && item.district === area),
-  );
-  if (!street?.district) return "Sem distrito/povoado informado";
-  return districtLabel(street.district);
-};
+const areaMacro = (area: string) => localityOptions.find((option) => option.key === area)?.section || "Zona Rural";
 
 export function App() {
   const [collapsed, setCollapsed] = useState(
@@ -285,6 +242,7 @@ export function App() {
   const [mobile, setMobile] = useState(false);
   const [page, setPage] = useState("Visão geral");
   const [agentMode, setAgentMode] = useState(false);
+  const [entryChoice, setEntryChoice] = useState<"admin" | "agent" | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState("");
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem("pulso-supabase-admin-token") || "");
@@ -316,11 +274,6 @@ export function App() {
       removeEventListener("offline", b);
     };
   }, []);
-  const completed = useMemo(
-      () => localities.reduce((a, x) => a + Number(x[1]), 0),
-      [],
-    ),
-    target = localities.reduce((a, x) => a + Number(x[2]), 0);
   const act = (m: string) => {
     setToast(m);
     setTimeout(() => setToast(""), 2500);
@@ -331,11 +284,41 @@ export function App() {
     localStorage.setItem("pulso-supabase-admin-token", data.token);
     setAdminToken(data.token);
   };
+  const logoutAdmin = () => {
+    localStorage.removeItem("pulso-supabase-admin-token");
+    setAdminToken("");
+  };
   if (agentMode)
     return (
       <AgentApp back={() => setAgentMode(false)} online={online} act={act} />
     );
-  if (!adminToken) return <div className="adminLogin"><div className="adminLoginCard"><div className="mark">P</div><p className="eyebrow">ADMINISTRAÇÃO</p><h1>Entrar no Pulso</h1><label>Usuário<input value={adminLogin.username} onChange={e=>setAdminLogin({...adminLogin,username:e.target.value})}/></label><label>Senha<input type="password" value={adminLogin.password} onChange={e=>setAdminLogin({...adminLogin,password:e.target.value})}/></label><button className="primary" onClick={loginAdmin}>Entrar</button><button className="secondary" onClick={()=>setAgentMode(true)}>Acessar Pulso Campo</button>{toast&&<div className="toast">{toast}</div>}</div></div>;
+  if (!adminToken && entryChoice === "agent")
+    return (
+      <AgentApp back={() => setEntryChoice(null)} online={online} act={act} />
+    );
+  if (!adminToken && entryChoice !== "admin")
+    return (
+      <div className="adminLogin">
+        <div className="adminLoginCard">
+          <div className="mark">P</div>
+          <p className="eyebrow">ACESSO</p>
+          <h1>Como você quer entrar?</h1>
+          <p>Escolha o tipo de acesso ao Pulso.</p>
+          <div className="entryChoice">
+            <button className="startBtn" onClick={() => setEntryChoice("admin")}>
+              <ShieldCheck /> Acesso do administrador
+            </button>
+            <button
+              className="startBtnOutline"
+              onClick={() => setEntryChoice("agent")}
+            >
+              <UserRoundCheck /> Acesso do agente da pesquisa
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  if (!adminToken) return <div className="adminLogin"><div className="adminLoginCard"><div className="mark">P</div><p className="eyebrow">ADMINISTRAÇÃO</p><h1>Entrar no Pulso</h1><label>Usuário<input value={adminLogin.username} onChange={e=>setAdminLogin({...adminLogin,username:e.target.value})}/></label><label>Senha<input type="password" value={adminLogin.password} onChange={e=>setAdminLogin({...adminLogin,password:e.target.value})}/></label><button className="primary" onClick={loginAdmin}>Entrar</button><button className="secondary" onClick={()=>setEntryChoice(null)}>← Voltar</button>{toast&&<div className="toast">{toast}</div>}</div></div>;
   return (
     <div className="app">
       <aside
@@ -381,12 +364,16 @@ export function App() {
             <span>Configurações</span>
           </button>
           <div className="profile">
-            <div>JM</div>
+            <div>JC</div>
             <span>
-              <b>Josielton Melo</b>
+              <b>Josielton Cavalcante</b>
               <small>Administrador geral</small>
             </span>
           </div>
+          <button className="logoutBtn" onClick={logoutAdmin}>
+            <LogOut />
+            <span>Sair</span>
+          </button>
         </div>
       </aside>
       {mobile && <div className="scrim" onClick={() => setMobile(false)} />}
@@ -415,13 +402,7 @@ export function App() {
           </div>
         </header>
         {page === "Visão geral" ? (
-          <Dashboard
-            completed={completed}
-            target={target}
-            online={online}
-            act={act}
-            adminToken={adminToken}
-          />
+          <Dashboard online={online} act={act} adminToken={adminToken} />
         ) : (
           <Module page={page} act={act} adminToken={adminToken} />
         )}
@@ -437,14 +418,10 @@ export function App() {
 }
 
 function Dashboard({
-  completed,
-  target,
   online,
   act,
   adminToken,
 }: {
-  completed: number;
-  target: number;
   online: boolean;
   act: (x: string) => void;
   adminToken: string;
@@ -474,11 +451,38 @@ function Dashboard({
       </div>
     );
   }
+  // Só considera uma pesquisa "Ativa" de verdade — cair para a primeira do
+  // array (independente do status) fazia o dashboard destacar em posição de
+  // maior evidência os números de uma pesquisa já cancelada/finalizada.
+  const activeResearch =
+    dashboardResearches?.find((r) => r.status === "Ativa") || null;
+  const dashCompleted =
+    activeResearch?.interviews?.length ?? activeResearch?.responses ?? 0;
+  const dashTarget = activeResearch?.target || 0;
+  const dashPct = dashTarget
+    ? Math.round((dashCompleted / dashTarget) * 100)
+    : 0;
+  const dashAgents = activeResearch?.agents || [];
+  const dashActiveAgents = dashAgents.filter((a) => !a.blocked);
+  const dashInterviews = activeResearch?.interviews || [];
+  const dashQuotas = Object.entries(activeResearch?.quotas || {});
+  // Contagem por localidade em uma única passada (O(quotas + entrevistas)),
+  // em vez de re-filtrar dashInterviews inteira para cada localidade —
+  // O(quotas × entrevistas) do código anterior.
+  const normalizeLocality = (v: string) => (v || "").trim().toLocaleUpperCase("pt-BR");
+  const areaByNormalized: Record<string, string> = {};
+  for (const [area] of dashQuotas) areaByNormalized[normalizeLocality(area)] = area;
+  const dashDoneByLocality: Record<string, number> = {};
+  for (const iv of dashInterviews) {
+    const area = areaByNormalized[normalizeLocality(iv.locality)];
+    if (area) dashDoneByLocality[area] = (dashDoneByLocality[area] || 0) + 1;
+  }
+
   return (
     <div className="content">
       <div className="welcome">
         <div>
-          <p className="eyebrow">SEGUNDA-FEIRA, 31 DE AGOSTO</p>
+          <p className="eyebrow">{todayLabel}</p>
           <h1>Bom dia, Josielton.</h1>
           <p>Acompanhe a operação da pesquisa em tempo real.</p>
         </div>
@@ -491,46 +495,66 @@ function Dashboard({
           </button>
           <button
             className="primary"
-            onClick={() => act("Nova rodada aberta em modo rascunho")}
+            onClick={() => act("Abra a aba Pesquisas para criar uma nova rodada")}
           >
             <Plus /> Nova rodada
           </button>
         </div>
       </div>
-      <section className="activeRound">
-        <div>
-          <span className="live">
-            <i /> COLETA EM ANDAMENTO
-          </span>
-          <h2>Pesquisa de avaliação municipal · 004/2026</h2>
-          <p>Instituto demonstrativo · 28 ago — 02 set 2026</p>
-        </div>
-        <button className="secondary">
-          Ver detalhes <ArrowUpRight />
-        </button>
-      </section>
+      {activeResearch && (
+        <section className="activeRound">
+          <div>
+            <span className="live">
+              <i />{" "}
+              {activeResearch.status === "Ativa"
+                ? "COLETA EM ANDAMENTO"
+                : activeResearch.status.toUpperCase()}
+            </span>
+            <h2>
+              {activeResearch.title} · {activeResearch.number}
+            </h2>
+            <p>
+              {activeResearch.city || "—"} ·{" "}
+              {activeResearch.start ? formatDateBR(activeResearch.start) : "—"}{" "}
+              — {activeResearch.end ? formatDateBR(activeResearch.end) : "—"}
+            </p>
+          </div>
+        </section>
+      )}
       <div className="stats">
         <Stat
           label="Entrevistas concluídas"
-          value={String(completed)}
-          note={`de ${target} previstas · 66%`}
+          value={String(dashCompleted)}
+          note={
+            dashTarget
+              ? `de ${dashTarget} previstas · ${dashPct}%`
+              : "Amostra ainda não definida"
+          }
         />
         <Stat
           label="Agentes em campo"
-          value="8"
-          note="de 10 agentes ativos"
+          value={String(dashActiveAgents.length)}
+          note={
+            dashAgents.length
+              ? `de ${dashAgents.length} agentes cadastrados`
+              : "Nenhum agente cadastrado"
+          }
           tone="gold"
         />
         <Stat
-          label="Pendentes de envio"
-          value={online ? "14" : "21"}
-          note={online ? "Sincronização automática" : "Dispositivo sem conexão"}
+          label="Localidades cobertas"
+          value={String(dashQuotas.length)}
+          note={
+            dashQuotas.length
+              ? "com cota definida"
+              : "Nenhuma localidade configurada"
+          }
           tone="light"
         />
         <Stat
-          label="Alertas de auditoria"
-          value="7"
-          note="3 exigem atenção"
+          label="Perguntas no questionário"
+          value={String(activeResearch?.questions?.length || 0)}
+          note="cadastradas nesta pesquisa"
           tone="warn"
         />
       </div>
@@ -541,126 +565,73 @@ function Dashboard({
               <span className="kicker">PROGRESSO GERAL</span>
               <h3>Cobertura por localidade</h3>
             </div>
-            <button className="textBtn">
-              Ver todas <ArrowUpRight />
-            </button>
           </div>
           <div className="progressBody">
-            <Ring value={66} />
-            <div className="bars">
-              {localities.map((x) => (
-                <div className="bar" key={x[0]}>
-                  <div>
-                    <span>{x[0]}</span>
-                    <b>
-                      {x[1]} <small>/ {x[2]}</small>
-                    </b>
-                  </div>
-                  <i>
-                    <em
-                      style={{
-                        width: `${(Number(x[1]) / Number(x[2])) * 100}%`,
-                      }}
-                    />
-                  </i>
-                </div>
-              ))}
-            </div>
+            <Ring value={dashPct} />
+            {dashQuotas.length ? (
+              <div className="bars">
+                {dashQuotas.map(([area, quota]) => {
+                  const done = dashDoneByLocality[area] || 0;
+                  return (
+                    <div className="bar" key={area}>
+                      <div>
+                        <span>{area}</span>
+                        <b>
+                          {done} <small>/ {quota}</small>
+                        </b>
+                      </div>
+                      <i>
+                        <em
+                          style={{
+                            width: `${quota ? Math.min(100, (done / Number(quota)) * 100) : 0}%`,
+                          }}
+                        />
+                      </i>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p>Nenhuma cota configurada.</p>
+            )}
           </div>
         </section>
         <section className="panel mapPanel">
           <div className="panelTitle">
             <div>
-              <span className="kicker">OPERAÇÃO AO VIVO</span>
-              <h3>Mapa de cobertura</h3>
+              <span className="kicker">OPERAÇÃO</span>
+              <h3>Situação dos agentes</h3>
             </div>
             <span className={"connection " + (online ? "" : "off")}>
               {online ? <Wifi /> : <WifiOff />}
-              {online ? "Ao vivo" : "Offline"}
+              {online ? "Online" : "Offline"}
             </span>
           </div>
-          <div className="map">
-            <span className="road r1" />
-            <span className="road r2" />
-            <span className="road r3" />
-            <span className="zone z1">CENTRO</span>
-            <span className="zone z2">ALTO BONITO</span>
-            <span className="zone z3">COHAB</span>
-            {[1, 2, 3, 4, 5, 6, 7].map((x) => (
-              <MapPin key={x} className={"pin p" + x} />
-            ))}
-            <div className="mapLegend">
-              <i /> 8 agentes ativos
+          {dashAgents.length ? (
+            <div className="table">
+              {dashAgents.map((a) => (
+                <div className="tr" key={a.id}>
+                  <span className="person">
+                    <i>
+                      {a.name
+                        .split(" ")
+                        .map((x) => x[0])
+                        .join("")
+                        .slice(0, 2)}
+                    </i>
+                    <b>{a.name}</b>
+                  </span>
+                  <strong>{a.completed || 0} entrevistas</strong>
+                  <span className={"badge " + (a.blocked ? "gray" : "green")}>
+                    {a.blocked ? "Bloqueado" : "Ativo"}
+                  </span>
+                </div>
+              ))}
             </div>
-          </div>
+          ) : (
+            <p className="agentHint">Nenhum agente cadastrado ainda.</p>
+          )}
         </section>
-      </div>
-      <section className="panel agents">
-        <div className="panelTitle">
-          <div>
-            <span className="kicker">EQUIPE DE CAMPO</span>
-            <h3>Atividade recente</h3>
-          </div>
-          <button className="textBtn">
-            Gerenciar equipe <ArrowUpRight />
-          </button>
-        </div>
-        <div className="table">
-          <div className="tr th">
-            <span>AGENTE</span>
-            <span>LOCALIDADE ATUAL</span>
-            <span>ENTREVISTAS HOJE</span>
-            <span>STATUS</span>
-            <span />
-          </div>
-          {agents.map((a, i) => (
-            <div className="tr" key={a[0]}>
-              <span className="person">
-                <i>
-                  {a[0]
-                    .split(" ")
-                    .map((x) => x[0])
-                    .join("")
-                    .slice(0, 2)}
-                </i>
-                <b>
-                  {a[0]}
-                  <small>Última atividade há {i * 3 + 2} min</small>
-                </b>
-              </span>
-              <span>
-                <MapPin /> {a[1]}
-              </span>
-              <strong>{a[2]}</strong>
-              <span
-                className={
-                  "badge " +
-                  (a[3] === "Offline"
-                    ? "gray"
-                    : a[3] === "Sincronizando"
-                      ? "blue"
-                      : "green")
-                }
-              >
-                {a[3]}
-              </span>
-              <button className="icon">
-                <MoreHorizontal />
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
-      <div className="disclaimer">
-        <AlertTriangle />
-        <div>
-          <b>Ambiente demonstrativo</b>
-          <p>
-            Os números exibidos são dados de demonstração, não resultados reais.
-            As cotas devem ser configuradas pela coordenação após a importação
-            dos dados oficiais.
-          </p>
-        </div>
       </div>
     </div>
   );
@@ -959,6 +930,14 @@ function Territory({ act, adminToken }: { act: (message: string) => void; adminT
   );
 }
 
+type Interview = {
+  id: string;
+  agentId: string;
+  agentName: string;
+  locality: string;
+  answers: Record<string, string | string[]>;
+  submittedAt: string;
+};
 type Research = {
   id: number;
   number: string;
@@ -990,61 +969,8 @@ type Research = {
     updatedAt?: string;
     visitedStreets?: number[];
   }>;
-  interviews?: Array<{
-    id: string;
-    agentId: string;
-    agentName: string;
-    locality: string;
-    answers: Record<string, string | string[]>;
-    submittedAt: string;
-  }>;
+  interviews?: Interview[];
 };
-const seedResearch: Research[] = [
-  {
-    id: 1,
-    number: "004/2026",
-    title: "Avaliação municipal",
-    type: "Mista",
-    status: "Ativa",
-    start: "28/08/2026",
-    end: "02/09/2026",
-    responses: 190,
-    questions: ["Q01_ELEITOR", "Q02_PROBLEMA", "Q03_AVALIACAO"],
-  },
-  {
-    id: 2,
-    number: "003/2026",
-    title: "Cenário eleitoral",
-    type: "Eleitoral",
-    status: "Finalizada",
-    start: "10/03/2026",
-    end: "13/03/2026",
-    responses: 340,
-    questions: ["Q01_ELEITOR", "Q12_GOV", "Q19_DEPFED"],
-  },
-  {
-    id: 3,
-    number: "002/2026",
-    title: "Percepção da gestão",
-    type: "Perfil de gestão",
-    status: "Finalizada",
-    start: "12/01/2026",
-    end: "15/01/2026",
-    responses: 320,
-    questions: ["Q01_ELEITOR", "Q02_PROBLEMA", "Q03_AVALIACAO"],
-  },
-  {
-    id: 4,
-    number: "001/2026",
-    title: "Teste de questionário",
-    type: "Mista",
-    status: "Cancelada",
-    start: "05/01/2026",
-    end: "—",
-    responses: 18,
-    questions: ["Q01_ELEITOR"],
-  },
-];
 type Question = {
   id: string;
   block: string;
@@ -1053,59 +979,11 @@ type Question = {
   vars: string[];
   options?: string[];
   eliminatory?: boolean;
+  identification?: boolean;
+  city?: string;
+  mandatory?: boolean;
 };
 const closedQuestionTypes = ["Escolha única", "Múltipla escolha", "Escala"];
-const seedQuestions: Question[] = [
-  {
-    id: "Q01_ELEITOR",
-    block: "Triagem",
-    text: "O(a) senhor(a) é eleitor(a) de Bonito?",
-    type: "Escolha única",
-    vars: [],
-  },
-  {
-    id: "Q02_PROBLEMA",
-    block: "Percepção",
-    text: "Na sua opinião, qual é o principal problema de Bonito hoje?",
-    type: "Texto aberto",
-    vars: [],
-  },
-  {
-    id: "Q03_AVALIACAO",
-    block: "Gestão",
-    text: "Como o(a) senhor(a) avalia a administração municipal?",
-    type: "Escala",
-    vars: [],
-  },
-  {
-    id: "Q12_GOV",
-    block: "Eleitoral",
-    text: "Se a eleição para governador fosse hoje, o(a) senhor(a) votaria em {{candidato}}?",
-    type: "Escolha única",
-    vars: ["candidato"],
-  },
-  {
-    id: "Q19_DEPFED",
-    block: "Eleitoral",
-    text: "O apoio de {{apoiador}} aumenta ou diminui sua chance de votar em {{candidato}}?",
-    type: "Escolha única",
-    vars: ["candidato", "apoiador"],
-  },
-  {
-    id: "Q20_MENSAGEM",
-    block: "Eleitoral",
-    text: "Quando ouve “{{palavra_chave}}”, qual é a primeira opinião que vem à mente?",
-    type: "Texto aberto",
-    vars: ["palavra_chave"],
-  },
-  {
-    id: "Q28_TELEFONE",
-    block: "Validação",
-    text: "Telefone para eventual checagem de qualidade (opcional)",
-    type: "Telefone",
-    vars: [],
-  },
-];
 const variableLabels: Record<string, string> = {
   candidato: "Nome do candidato ou pré-candidato",
   apoiador: "Nome do apoiador ou liderança",
@@ -1126,7 +1004,10 @@ const resolveQuestion = (
 function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string) => void }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [researches, setResearches] = useState<Research[]>([]);
-  const [draft, setDraft] = useState({ text: "", type: "Texto aberto", options: ["", ""], eliminatory: false });
+  const [draft, setDraft] = useState({ text: "", block: "Geral", type: "Texto aberto", options: ["", ""], eliminatory: false, city: "", mandatory: false });
+  const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
+  const [blockFilter, setBlockFilter] = useState("Todos");
+  const [cityFilter, setCityFilter] = useState("Todas");
   useEffect(() => { supabase.rpc("pulso_admin_get_state", { p_token: adminToken }).then(({data})=>{ setQuestions(data?.questions || []); setResearches(data?.researches || []); }); }, [adminToken]);
   const persist = async (next: Question[]) => {
     const { error } = await supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: researches, p_questions: next });
@@ -1134,13 +1015,320 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
     setQuestions(next); act("Banco de perguntas atualizado");
   };
   const add = () => {
-    const options = draft.type === "Múltipla escolha" ? draft.options.map(x=>x.trim()).filter(Boolean) : undefined;
+    const options = closedQuestionTypes.includes(draft.type) ? draft.options.map(x=>x.trim()).filter(Boolean) : undefined;
     if (!draft.text.trim()) return act("Digite o texto da pergunta");
-    if (draft.type === "Múltipla escolha" && (!options || options.length < 2)) return act("Informe pelo menos duas opções");
-    const question: Question = { id: `Q${Date.now()}`, block: "Geral", text: draft.text.trim(), type: draft.type, vars: [], options, eliminatory: draft.eliminatory };
-    void persist([...questions, question]); setDraft({ text:"", type:"Texto aberto", options:["",""], eliminatory:false });
+    if (closedQuestionTypes.includes(draft.type) && (!options || options.length < 2)) return act("Informe pelo menos duas opções");
+    const question: Question = { id: `Q${Date.now()}`, block: draft.block, text: draft.text.trim(), type: draft.type, vars: [], options, eliminatory: draft.eliminatory, city: draft.city.trim() || undefined, mandatory: draft.mandatory };
+    void persist([...questions, question]); setDraft({ text:"", block:"Geral", type:"Texto aberto", options:["",""], eliminatory:false, city: draft.city, mandatory:false });
   };
-  return <div className="content questionBankPage"><div className="moduleHero"><div className="bigIcon"><FileText/></div><div><p className="eyebrow">QUESTIONÁRIO</p><h1>Banco de perguntas</h1><p>Cadastre as perguntas que poderão ser utilizadas nas pesquisas.</p></div><div className="territoryCount"><b>{questions.length}</b><span>perguntas</span></div></div><section className="panel questionRegister"><h3>Nova pergunta</h3><label>Texto da pergunta<textarea value={draft.text} onChange={e=>setDraft({...draft,text:e.target.value})} placeholder="Digite a pergunta..."/></label><div className="questionRegisterGrid"><label>Tipo de resposta<select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value})}><option>Texto aberto</option><option>Múltipla escolha</option></select></label><label className="checkLabel"><input type="checkbox" checked={draft.eliminatory} onChange={e=>setDraft({...draft,eliminatory:e.target.checked})}/> Pergunta eliminatória</label></div>{draft.type==="Múltipla escolha"&&<div className="optionRegister"><b>Opções de resposta</b>{draft.options.map((option,index)=><div key={index}><input value={option} onChange={e=>{const options=[...draft.options];options[index]=e.target.value;setDraft({...draft,options})}} placeholder={`Opção ${index+1}`}/>{draft.options.length>2&&<button onClick={()=>setDraft({...draft,options:draft.options.filter((_,i)=>i!==index)})}>×</button>}</div>)}<button className="secondary" onClick={()=>setDraft({...draft,options:[...draft.options,""]})}><Plus/> Adicionar opção</button></div>}<button className="primary" onClick={add}><CheckCircle2/> Salvar pergunta</button></section><section className="panel questionList"><h3>Perguntas cadastradas</h3>{!questions.length?<p className="agentHint">Nenhuma pergunta cadastrada.</p>:questions.map(q=><article key={q.id}><div><b>{q.text}</b><span>{q.type}{q.eliminatory?" · Eliminatória":""}</span>{q.options?.length?<small>{q.options.join(" • ")}</small>:null}</div><button className="icon" onClick={()=>void persist(questions.filter(x=>x.id!==q.id))}><Trash2/></button></article>)}</section></div>;
+  const saveEdit = () => {
+    if (!editingQuestion) return;
+    if (!editingQuestion.text.trim()) return act("O texto da pergunta não pode ficar vazio");
+    const options = closedQuestionTypes.includes(editingQuestion.type)
+      ? (editingQuestion.options || []).map((o) => o.trim()).filter(Boolean)
+      : undefined;
+    if (closedQuestionTypes.includes(editingQuestion.type) && (!options || options.length < 2)) return act("Informe pelo menos duas opções");
+    void persist(questions.map((q) => (q.id === editingQuestion.id ? { ...editingQuestion, options } : q)));
+    setEditingQuestion(null);
+  };
+  const removeQuestion = (q: Question) => {
+    if (!window.confirm(`Excluir a pergunta "${q.text}" do banco?`)) return;
+    void persist(questions.filter((x) => x.id !== q.id));
+    if (editingQuestion?.id === q.id) setEditingQuestion(null);
+  };
+  const duplicateQuestion = (q: Question) => {
+    const copy: Question = { ...q, id: `Q${Date.now()}`, text: `${q.text} (cópia)` };
+    void persist([...questions, copy]);
+  };
+  const blockOptions = Array.from(new Set(questions.map((q) => q.block))).sort(
+    (a, b) => a.localeCompare(b, "pt-BR"),
+  );
+  const cityOptions = Array.from(
+    new Set(questions.map((q) => q.city).filter(Boolean) as string[]),
+  ).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const filteredQuestions = questions.filter(
+    (q) =>
+      (blockFilter === "Todos" || q.block === blockFilter) &&
+      (cityFilter === "Todas" || q.city === cityFilter),
+  );
+  return (
+    <div className="content questionBankPage">
+      <div className="moduleHero">
+        <div className="bigIcon"><FileText /></div>
+        <div>
+          <p className="eyebrow">QUESTIONÁRIO</p>
+          <h1>Banco de perguntas</h1>
+          <p>Cadastre as perguntas que poderão ser utilizadas nas pesquisas.</p>
+        </div>
+        <div className="territoryCount"><b>{questions.length}</b><span>perguntas</span></div>
+      </div>
+      <section className="panel questionRegister">
+        <h3>Nova pergunta</h3>
+        <label>
+          Texto da pergunta
+          <textarea value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} placeholder="Digite a pergunta..." />
+        </label>
+        <div className="questionRegisterGrid">
+          <label>
+            Bloco
+            <select value={draft.block} onChange={(e) => setDraft({ ...draft, block: e.target.value })}>
+              <option>Geral</option>
+              <option>Triagem</option>
+              <option>Percepção</option>
+              <option>Gestão</option>
+              <option>Eleitoral</option>
+              <option>Perfil</option>
+              <option>Validação</option>
+            </select>
+          </label>
+          <label>
+            Tipo de resposta
+            <select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}>
+              <option>Texto aberto</option>
+              <option>Escolha única</option>
+              <option>Múltipla escolha</option>
+              <option>Escala</option>
+              <option>Número</option>
+              <option>Telefone</option><option>Endereço</option>
+            </select>
+          </label>
+          <label>
+            Cidade
+            <input
+              value={draft.city}
+              onChange={(e) => setDraft({ ...draft, city: e.target.value })}
+              placeholder="Ex.: Bonito/PE"
+            />
+          </label>
+          <label className="checkLabel">
+            <input type="checkbox" checked={draft.eliminatory} onChange={(e) => setDraft({ ...draft, eliminatory: e.target.checked })} />
+            Pergunta eliminatória
+          </label>
+          <label className="checkLabel">
+            <input type="checkbox" checked={draft.mandatory} onChange={(e) => setDraft({ ...draft, mandatory: e.target.checked })} />
+            Pergunta obrigatória (entra em todas as pesquisas)
+          </label>
+        </div>
+        {closedQuestionTypes.includes(draft.type) && (
+          <div className="optionRegister">
+            <b>Opções de resposta</b>
+            {draft.options.map((option, index) => (
+              <div key={index}>
+                <input
+                  value={option}
+                  onChange={(e) => {
+                    const options = [...draft.options];
+                    options[index] = e.target.value;
+                    setDraft({ ...draft, options });
+                  }}
+                  placeholder={`Opção ${index + 1}`}
+                />
+                {draft.options.length > 2 && (
+                  <button onClick={() => setDraft({ ...draft, options: draft.options.filter((_, i) => i !== index) })}>×</button>
+                )}
+              </div>
+            ))}
+            <button className="secondary" onClick={() => setDraft({ ...draft, options: [...draft.options, ""] })}>
+              <Plus /> Adicionar opção
+            </button>
+          </div>
+        )}
+        <button className="primary" onClick={add}>
+          <CheckCircle2 /> Salvar pergunta
+        </button>
+      </section>
+      <section className="panel questionList">
+        <div className="questionListHead">
+          <h3>Perguntas cadastradas</h3>
+          {!!questions.length && (
+            <div className="questionFilters">
+              <label className="blockFilter">
+                Filtrar por bloco
+                <select
+                  value={blockFilter}
+                  onChange={(e) => setBlockFilter(e.target.value)}
+                >
+                  <option>Todos</option>
+                  {blockOptions.map((block) => (
+                    <option key={block}>{block}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="blockFilter">
+                Filtrar por cidade
+                <select
+                  value={cityFilter}
+                  onChange={(e) => setCityFilter(e.target.value)}
+                >
+                  <option>Todas</option>
+                  {cityOptions.map((city) => (
+                    <option key={city}>{city}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+        {!questions.length ? (
+          <p className="agentHint">Nenhuma pergunta cadastrada.</p>
+        ) : !filteredQuestions.length ? (
+          <p className="agentHint">Nenhuma pergunta neste bloco.</p>
+        ) : (
+          filteredQuestions.map((q) => (
+            <Fragment key={q.id}>
+              <article>
+                <div>
+                  <b>{q.text}</b>
+                  <span>
+                    {q.block} · {q.type}
+                    {q.city ? ` · ${q.city}` : ""}
+                    {q.eliminatory ? " · Eliminatória" : ""}
+                    {q.identification ? " · Identificação" : ""}
+                    {q.mandatory ? " · Obrigatória" : ""}
+                  </span>
+                  {q.options?.length ? <small>{q.options.join(" • ")}</small> : null}
+                </div>
+                <div className="questionListActions">
+                  <button className="icon" title="Editar pergunta" onClick={() => setEditingQuestion({ ...q })}>
+                    <Pencil />
+                  </button>
+                  <button className="icon" title="Duplicar pergunta" onClick={() => duplicateQuestion(q)}>
+                    <Copy />
+                  </button>
+                  <button className="icon" title="Excluir pergunta" onClick={() => removeQuestion(q)}>
+                    <Trash2 />
+                  </button>
+                </div>
+              </article>
+              {editingQuestion?.id === q.id && (
+                <div className="questionEditor">
+                  <div>
+                    <span>
+                      <small>EDITANDO {editingQuestion.id}</small>
+                      <b>Alterar pergunta do banco</b>
+                    </span>
+                    <button onClick={() => setEditingQuestion(null)}>×</button>
+                  </div>
+                  <label>
+                    Texto da pergunta
+                    <textarea
+                      value={editingQuestion.text}
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, text: e.target.value })}
+                    />
+                  </label>
+                  <div className="questionEditFields">
+                    <label>
+                      Bloco
+                      <select
+                        value={editingQuestion.block}
+                        onChange={(e) => setEditingQuestion({ ...editingQuestion, block: e.target.value })}
+                      >
+                        <option>Geral</option>
+                        <option>Triagem</option>
+                        <option>Percepção</option>
+                        <option>Gestão</option>
+                        <option>Eleitoral</option>
+                        <option>Perfil</option>
+                        <option>Validação</option>
+                      </select>
+                    </label>
+                    <label>
+                      Tipo de resposta
+                      <select
+                        value={editingQuestion.type}
+                        onChange={(e) => setEditingQuestion({ ...editingQuestion, type: e.target.value })}
+                      >
+                        <option>Texto aberto</option>
+                        <option>Escolha única</option>
+                        <option>Múltipla escolha</option>
+                        <option>Escala</option>
+                        <option>Número</option>
+                        <option>Telefone</option><option>Endereço</option>
+                      </select>
+                    </label>
+                    <label>
+                      Cidade
+                      <input
+                        value={editingQuestion.city || ""}
+                        onChange={(e) => setEditingQuestion({ ...editingQuestion, city: e.target.value })}
+                        placeholder="Ex.: Bonito/PE"
+                      />
+                    </label>
+                  </div>
+                  <label className="checkLabel">
+                    <input
+                      type="checkbox"
+                      checked={!!editingQuestion.eliminatory}
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, eliminatory: e.target.checked })}
+                    />
+                    Pergunta eliminatória
+                  </label>
+                  <label className="checkLabel">
+                    <input
+                      type="checkbox"
+                      checked={!!editingQuestion.mandatory}
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, mandatory: e.target.checked })}
+                    />
+                    Pergunta obrigatória (entra em todas as pesquisas)
+                  </label>
+                  {closedQuestionTypes.includes(editingQuestion.type) && (
+                    <div className="optionsEditor">
+                      <span>
+                        Opções de resposta
+                        <small>Usadas pelo agente no Pulso Campo e nas tabelas do relatório de resultado.</small>
+                      </span>
+                      {(editingQuestion.options || []).map((option, i) => (
+                        <div className="optionRow" key={i}>
+                          <input
+                            value={option}
+                            onChange={(e) => {
+                              const options = [...(editingQuestion.options || [])];
+                              options[i] = e.target.value;
+                              setEditingQuestion({ ...editingQuestion, options });
+                            }}
+                            placeholder={`Opção ${i + 1}`}
+                          />
+                          <button
+                            onClick={() =>
+                              setEditingQuestion({
+                                ...editingQuestion,
+                                options: (editingQuestion.options || []).filter((_, x) => x !== i),
+                              })
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          setEditingQuestion({
+                            ...editingQuestion,
+                            options: [...(editingQuestion.options || []), ""],
+                          })
+                        }
+                      >
+                        <Plus /> Adicionar opção
+                      </button>
+                    </div>
+                  )}
+                  <div className="questionEditActions">
+                    <button className="secondary" onClick={() => setEditingQuestion(null)}>
+                      Cancelar
+                    </button>
+                    <button className="primary" onClick={saveEdit}>
+                      <CheckCircle2 /> Salvar alterações
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Fragment>
+          ))
+        )}
+      </section>
+    </div>
+  );
 }
 
 function Researches({ act, adminToken }: { act: (x: string) => void; adminToken: string }) {
@@ -1197,13 +1385,14 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   const [reportChartDimension, setReportChartDimension] = useState<
     "localidade" | "candidato"
   >("localidade");
-  const [editingGroupName, setEditingGroupName] = useState("");
-  const [editingGroupSelection, setEditingGroupSelection] = useState<
-    string[]
-  >([]);
-  const [expandedGroupDistricts, setExpandedGroupDistricts] = useState<
-    string[]
-  >([]);
+
+  const [printRequest, setPrintRequest] = useState<
+    { view: "campo"; id: number } | null
+  >(null);
+  useEffect(() => {
+    if (!printRequest) return;
+    window.print();
+  }, [printRequest]);
   const [draggedEditingQuestion, setDraggedEditingQuestion] = useState<
     string | null
   >(null);
@@ -1227,10 +1416,9 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     target: 0,
     questionTarget: 1,
     quotas: {} as Record<string, number>,
-    areaWeights: { ...defaultAreaWeights } as Record<string, number>,
     neighborhoodGroups: [] as Array<{ name: string; areas: string[]; macro: string }>,
     candidates: [] as Array<{ id: string; office: string; name: string; supporter: string }>,
-    selected: ["Q01_ELEITOR"] as string[],
+    selected: [] as string[],
     variables: {} as Record<string, Record<string, string>>,
   });
   const [newQ, setNewQ] = useState({
@@ -1238,8 +1426,8 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     block: "Geral",
     type: "Escolha única",
   });
-  const [groupName, setGroupName] = useState("");
-  const [groupSelection, setGroupSelection] = useState<string[]>([]);
+  const [questionCityFilter, setQuestionCityFilter] = useState("Todas");
+
   const [candidateDraft, setCandidateDraft] = useState({ office: "", name: "", supporter: "" });
   const openCreateResearch = () => {
     const year = new Date().getFullYear();
@@ -1250,7 +1438,22 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
         : highest;
     }, 0);
     const nextNumber = `${String(highestNumber + 1).padStart(3, "0")}/${year}`;
-    setForm((current) => ({ ...current, number: nextNumber }));
+    const mandatoryIds = questions.filter((q) => q.mandatory).map((q) => q.id);
+    setForm((current) => ({
+      ...current,
+      number: nextNumber,
+      selected: mandatoryIds,
+      // O limite nunca pode nascer menor que a quantidade de perguntas
+      // obrigatórias já pré-selecionadas, senão toggle() trava a inclusão
+      // de qualquer outra pergunta antes mesmo do admin ajustar o limite.
+      questionTarget: Math.max(current.questionTarget || 1, mandatoryIds.length || 1),
+    }));
+    if (!mandatoryIds.length) {
+      // Nenhuma pergunta obrigatória cadastrada: diferente da versão antiga
+      // (que sempre incluía uma pergunta de triagem fixa), esta pesquisa vai
+      // nascer sem nenhuma pergunta selecionada até o admin escolher manualmente.
+      act("Nenhuma pergunta obrigatória cadastrada — selecione as perguntas do questionário manualmente");
+    }
     setCreating(true);
   };
   useEffect(() => {
@@ -1264,15 +1467,17 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     });
   }, [adminToken]);
   const syncState = (nextItems: Research[], nextQuestions = questions) => supabase.rpc("pulso_admin_sync_state", { p_token: adminToken, p_researches: nextItems, p_questions: nextQuestions });
-  const save = (next: Research[]) => {
+  const save = async (next: Research[]) => {
     setItems(next);
     localStorage.setItem("pulso-research", JSON.stringify(next));
-    void syncState(next);
+    const { error } = await syncState(next);
+    if (error) act("Não foi possível salvar — verifique sua conexão e tente novamente");
   };
-  const saveQuestions = (next: Question[]) => {
+  const saveQuestions = async (next: Question[]) => {
     setQuestions(next);
     localStorage.setItem("pulso-question-bank", JSON.stringify(next));
-    void syncState(items, next);
+    const { error } = await syncState(items, next);
+    if (error) act("Não foi possível salvar — verifique sua conexão e tente novamente");
   };
   const saveCargos = (next: string[]) => {
     setCargos(next);
@@ -1347,9 +1552,26 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   const updateEditing = (patch: Partial<Research>) => {
     if (!editing) return;
     const updated = { ...editing, ...patch };
-    save(items.map((item) => (item.id === editing.id ? updated : item)));
+    if (distributionValid(updated.target || 0, updated.quotas || {})) {
+      save(items.map((item) => (item.id === editing.id ? updated : item)));
+    }
     setEditing(updated);
   };
+  const closeEditing = () => {
+    if (editing && !distributionValid(editing.target || 0, editing.quotas || {})) {
+      setModalTab("config");
+      act("Ajuste as entrevistas por bairro: a soma deve ser exatamente igual ao total de pessoas a entrevistar.");
+      return;
+    }
+    setEditing(null);
+  };
+  const editingLocalityOptions = [
+    ...localityOptions.filter((option) => !(editing?.neighborhoodGroups || []).some((group) => group.areas.includes(option.key))),
+    ...(editing?.neighborhoodGroups || []).map((group) => ({
+      key: `Grupo: ${group.name}`, label: `Grupo: ${group.name}`,
+      section: areaMacro(group.areas[0] || ""),
+    })),
+  ];
   const moveEditingQuestion = (fromId: string, toId: string) => {
     if (!editing || fromId === toId) return;
     const order = [...editing.questions];
@@ -1383,67 +1605,29 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   const editingDistricts = Array.from(
     new Set(editingQuotaAreas.map(editingEntityMacro)),
   );
-  const editingGroupedAreas = (editing?.neighborhoodGroups || []).flatMap(
-    (group) => group.areas,
-  );
-  const editingUngroupedAreas = editingQuotaAreas.filter(
-    (area) => !editingGroupedAreas.includes(area),
-  );
-  const createEditingNeighborhoodGroup = () => {
-    if (!editing) return;
-    if (!editingGroupName.trim() || editingGroupSelection.length < 2) {
-      act("Informe um nome e selecione pelo menos dois bairros");
-      return;
-    }
-    const macros = new Set(editingGroupSelection.map(editingEntityMacro));
-    if (macros.size > 1) {
-      act("Agrupe bairros pertencentes à mesma macroárea");
-      return;
-    }
-    const key = `Grupo: ${editingGroupName.trim()}`;
-    const quotas = { ...(editing.quotas || {}) };
-    const mergedQuota = editingGroupSelection.reduce(
-      (sum, area) => sum + Number(quotas[area] || 0),
-      0,
-    );
-    editingGroupSelection.forEach((area) => delete quotas[area]);
-    quotas[key] = mergedQuota;
-    const nextAgents = (editing.agents || []).map((agent) => ({
-      ...agent,
-      areas: Array.from(
-        new Set(
-          agent.areas.map((area) =>
-            editingGroupSelection.includes(area) ? key : area,
-          ),
-        ),
-      ),
-    }));
-    updateEditing({
-      quotas,
-      neighborhoodGroups: [
-        ...(editing.neighborhoodGroups || []),
-        {
-          name: editingGroupName.trim(),
-          areas: editingGroupSelection,
-          macro: editingEntityMacro(editingGroupSelection[0]),
-        },
-      ],
-      agents: nextAgents,
-    });
-    setEditingGroupName("");
-    setEditingGroupSelection([]);
-    act("Grupo de bairros criado");
-  };
   const agentCountByArea = (area: string) =>
     (editing?.agents || []).filter(
       (agent) => agent.id !== editingAgentId && agent.areas.includes(area),
     ).length;
   const agentQuotaFor = (areas: string[]) =>
-    areas.reduce(
-      (sum, area) => sum + Number(editing?.quotas?.[area] || 0),
-      0,
-    );
-  const agentDraftQuota = agentQuotaFor(agentDraft.areas);
+    areas.reduce((sum, area) => {
+      const total = Number(editing?.quotas?.[area] || 0);
+      const coveringCount =
+        (editing?.agents || []).filter((a) => a.areas.includes(area))
+          .length || 1;
+      return sum + Math.ceil(total / coveringCount);
+    }, 0);
+  // Prévia para o agente do formulário (novo ou em edição): usa
+  // agentCountByArea, que já exclui o próprio editingAgentId, e soma +1 para
+  // representar o agente do rascunho — diferente de agentQuotaFor acima
+  // (usado para agentes já existentes na lista, que já se contam sozinhos).
+  const agentDraftQuotaFor = (areas: string[]) =>
+    areas.reduce((sum, area) => {
+      const total = Number(editing?.quotas?.[area] || 0);
+      const coveringCount = agentCountByArea(area) + 1;
+      return sum + Math.ceil(total / coveringCount);
+    }, 0);
+  const agentDraftQuota = agentDraftQuotaFor(agentDraft.areas);
   const trackAreaOptions = Array.from(
     new Set((editing?.agents || []).flatMap((agent) => agent.areas)),
   ).sort((a, b) => a.localeCompare(b, "pt-BR"));
@@ -1467,12 +1651,6 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     }));
   const toggleDistrictExpand = (district: string) =>
     setExpandedDistricts((current) =>
-      current.includes(district)
-        ? current.filter((d) => d !== district)
-        : [...current, district],
-    );
-  const toggleGroupDistrictExpand = (district: string) =>
-    setExpandedGroupDistricts((current) =>
       current.includes(district)
         ? current.filter((d) => d !== district)
         : [...current, district],
@@ -1622,90 +1800,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
         .includes(query.toLowerCase()),
   );
   const reorderable = status === "Todas" && !query.trim();
-  const quotaTotal = Object.values(form.quotas).reduce(
-    (sum, value) => sum + Number(value || 0),
-    0,
-  );
   const selectedAreas = Object.keys(form.quotas);
-  const groupedAreas = form.neighborhoodGroups.flatMap((group) => group.areas);
-  const availableAreas = researchAreas.filter((area) => !groupedAreas.includes(area));
-  const quotaEntities = [
-    ...availableAreas,
-    ...form.neighborhoodGroups.map((group) => `Grupo: ${group.name}`),
-  ];
-  const entityMacro = (entity: string) => {
-    const group = form.neighborhoodGroups.find((item) => `Grupo: ${item.name}` === entity);
-    return group?.macro || areaMacro(entity);
-  };
-  const toggleArea = (area: string) =>
-    setForm((current) => {
-      const quotas = { ...current.quotas };
-      if (area in quotas) delete quotas[area];
-      else quotas[area] = 0;
-      return { ...current, quotas };
-    });
-  const distributeQuotas = () => {
-    if (!form.target || !selectedAreas.length) {
-      act("Informe a amostra total e selecione as localidades");
-      return;
-    }
-    const activeMacros = macroAreas.filter((macro) =>
-      selectedAreas.some((area) => entityMacro(area) === macro),
-    );
-    const weightTotal = activeMacros.reduce(
-      (sum, macro) => sum + Number(form.areaWeights[macro] || 0),
-      0,
-    );
-    if (!weightTotal) {
-      act("Informe o peso das macroáreas selecionadas");
-      return;
-    }
-    let remaining = form.target;
-    const quotas: Record<string, number> = {};
-    activeMacros.forEach((macro, macroIndex) => {
-      const entities = selectedAreas.filter((area) => entityMacro(area) === macro);
-      const macroTarget =
-        macroIndex === activeMacros.length - 1
-          ? remaining
-          : Math.round((form.target * Number(form.areaWeights[macro] || 0)) / weightTotal);
-      remaining -= macroTarget;
-      const base = Math.floor(macroTarget / entities.length);
-      const remainder = macroTarget % entities.length;
-      entities.forEach((entity, index) => {
-        quotas[entity] = base + (index < remainder ? 1 : 0);
-      });
-    });
-    setForm((current) => ({ ...current, quotas }));
-    act("Cotas distribuídas como sugestão editável");
-  };
-  const createNeighborhoodGroup = () => {
-    if (!groupName.trim() || groupSelection.length < 2) {
-      act("Informe um nome e selecione pelo menos dois bairros");
-      return;
-    }
-    const macros = new Set(groupSelection.map(areaMacro));
-    if (macros.size > 1) {
-      act("Agrupe bairros pertencentes à mesma macroárea");
-      return;
-    }
-    const key = `Grupo: ${groupName.trim()}`;
-    setForm((current) => {
-      const quotas = { ...current.quotas };
-      groupSelection.forEach((area) => delete quotas[area]);
-      quotas[key] = 0;
-      return {
-        ...current,
-        quotas,
-        neighborhoodGroups: [
-          ...current.neighborhoodGroups,
-          { name: groupName.trim(), areas: groupSelection, macro: areaMacro(groupSelection[0]) },
-        ],
-      };
-    });
-    setGroupName("");
-    setGroupSelection([]);
-    act("Grupo de bairros criado");
-  };
   const addCandidate = () => {
     if (!candidateDraft.office.trim() || !candidateDraft.name.trim()) {
       act("Informe o cargo e o nome do candidato ou pré-candidato");
@@ -1723,20 +1818,23 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   };
   const toggle = (id: string) =>
     setForm((f) => {
-      if (
-        !f.selected.includes(id) &&
-        f.questionTarget > 0 &&
-        f.selected.length >= f.questionTarget
-      ) {
-        act(`O limite definido é de ${f.questionTarget} perguntas`);
+      if (f.selected.includes(id)) {
+        if (questions.find((q) => q.id === id)?.mandatory) {
+          act("Esta pergunta é obrigatória e não pode ser removida");
+          return f;
+        }
+        return { ...f, selected: f.selected.filter((x) => x !== id) };
+      }
+      if (f.questionTarget > 0 && f.selected.length >= f.questionTarget) {
+        const mandatoryCount = questions.filter((q) => q.mandatory).length;
+        act(
+          f.selected.length <= mandatoryCount
+            ? `O limite de ${f.questionTarget} perguntas já está preenchido pelas perguntas obrigatórias — aumente o limite para adicionar mais`
+            : `O limite definido é de ${f.questionTarget} perguntas`,
+        );
         return f;
       }
-      return {
-        ...f,
-        selected: f.selected.includes(id)
-          ? f.selected.filter((x) => x !== id)
-          : [...f.selected, id],
-      };
+      return { ...f, selected: [...f.selected, id] };
     });
   const moveQuestion = (fromId: string, toId: string) => {
     if (fromId === toId) return;
@@ -1808,8 +1906,8 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
       act("Informe a amostra e selecione pelo menos uma localidade");
       return;
     }
-    if (quotaTotal !== form.target) {
-      act("A soma das cotas deve ser igual ao total de entrevistas");
+    if (!distributionValid(form.target, form.quotas)) {
+      act("A soma das entrevistas por bairro deve ser exatamente igual ao total de pessoas a entrevistar");
       return;
     }
     if (form.questionTarget <= 0) {
@@ -1846,7 +1944,6 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
         target: form.target,
         questionTarget: form.questionTarget,
         quotas: form.quotas,
-        areaWeights: form.areaWeights,
         neighborhoodGroups: form.neighborhoodGroups,
         candidates: form.candidates,
       },
@@ -1862,12 +1959,11 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
       start: "",
       end: "",
       target: 0,
-      questionTarget: 1,
+      questionTarget: Math.max(1, questions.filter((q) => q.mandatory).length),
       quotas: {},
-      areaWeights: { ...defaultAreaWeights },
       neighborhoodGroups: [],
       candidates: [],
-      selected: ["Q01_ELEITOR"],
+      selected: questions.filter((q) => q.mandatory).map((q) => q.id),
       variables: {},
     });
     act("Pesquisa criada com sucesso");
@@ -1937,6 +2033,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
       .filter(
         (q): q is Question =>
           !!q &&
+          !q.eliminatory &&
           closedQuestionTypes.includes(q.type) &&
           !!(q.options || []).length,
       );
@@ -1962,7 +2059,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
       rows: editingQuotaAreas.map((area) => ({
         area,
         ...computeRow(
-          interviews.filter((iv) => iv.locality === area),
+          interviews.filter((iv) => sameLocality(iv.locality, area)),
           q,
         ),
       })),
@@ -2022,7 +2119,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
             <option>Escolha única</option>
             <option>Múltipla escolha</option>
             <option>Texto aberto</option><option>Escala</option>
-            <option>Número</option><option>Telefone</option>
+            <option>Número</option><option>Telefone</option><option>Endereço</option>
           </select>
         </label>
       </div>
@@ -2349,7 +2446,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                       onChange={(e) =>
                         setForm({
                           ...form,
-                          target: Math.max(0, Number(e.target.value)),
+                          target: Math.max(0, Math.floor(Number(e.target.value))),
                         })
                       }
                       placeholder="Ex.: 350"
@@ -2377,185 +2474,8 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                   </label>
                 </div>
               </section>
-              <section className="formSection territorySetup">
-                <div className="sectionTitle">
-                  <div>
-                    <h3>2. Localidades e cotas</h3>
-                    <p>
-                      Primeiro defina o peso das macroáreas; depois distribua
-                      as entrevistas nos bairros ou grupos.
-                    </p>
-                  </div>
-                  <b>
-                    {quotaTotal} de {form.target || 0}
-                  </b>
-                </div>
-                <div className="territoryBlock">
-                  <div className="territoryBlockHead">
-                    <span>1</span>
-                    <div>
-                      <b>Distrito, povoado e Zona Rural</b>
-                      <small>Os pesos orientam a distribuição da amostra nos bairros.</small>
-                    </div>
-                  </div>
-                  <div className="macroWeightGrid">
-                    {macroAreas.map((macro) => (
-                      <label key={macro}>
-                        <span>{macro}</span>
-                        <div>
-                          <input
-                            type="number"
-                            min="0"
-                            value={form.areaWeights[macro] || ""}
-                            onChange={(e) =>
-                              setForm((current) => ({
-                                ...current,
-                                areaWeights: {
-                                  ...current.areaWeights,
-                                  [macro]: Math.max(0, Number(e.target.value)),
-                                },
-                              }))
-                            }
-                          />
-                          <em>%</em>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="weightTotal">
-                    Peso total: <b>{Object.values(form.areaWeights).reduce((sum, value) => sum + Number(value || 0), 0)}%</b>
-                  </div>
-                </div>
-                <div className="territoryBlock">
-                  <div className="territoryBlockHead">
-                    <span>2</span>
-                    <div>
-                      <b>Bairros e grupos de bairros</b>
-                      <small>Selecione individualmente ou reúna bairros da mesma macroárea.</small>
-                    </div>
-                  </div>
-                <div className="territoryActions">
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      setForm((current) => ({
-                        ...current,
-                        quotas: Object.fromEntries(
-                          quotaEntities.map((area) => [
-                            area,
-                            current.quotas[area] || 0,
-                          ]),
-                        ),
-                      }))
-                    }
-                  >
-                    Selecionar todas
-                  </button>
-                  <button className="secondary" onClick={distributeQuotas}>
-                    <SlidersHorizontal /> Distribuir automaticamente
-                  </button>
-                </div>
-                <div className="areaQuotaGrid">
-                  {quotaEntities.map((area) => {
-                    const selected = area in form.quotas;
-                    return (
-                      <article key={area} className={selected ? "selected" : ""}>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => toggleArea(area)}
-                          />
-                          <span>{area}</span>
-                          <small>{entityMacro(area)}</small>
-                        </label>
-                        {selected && (
-                          <input
-                            aria-label={`Cota de ${area}`}
-                            type="number"
-                            min="0"
-                            value={form.quotas[area] || ""}
-                            onChange={(e) =>
-                              setForm((current) => ({
-                                ...current,
-                                quotas: {
-                                  ...current.quotas,
-                                  [area]: Math.max(0, Number(e.target.value)),
-                                },
-                              }))
-                            }
-                            placeholder="Cota"
-                          />
-                        )}
-                      </article>
-                    );
-                  })}
-                </div>
-                <div className="groupBuilder">
-                  <div>
-                    <b>Juntar bairros</b>
-                    <small>Selecione dois ou mais bairros pertencentes à mesma macroárea.</small>
-                  </div>
-                  <input
-                    value={groupName}
-                    onChange={(e) => setGroupName(e.target.value)}
-                    placeholder="Nome do grupo, ex.: Boa Vista / Zé Batista"
-                  />
-                  <div className="groupAreaList">
-                    {availableAreas.map((area) => (
-                      <label key={area}>
-                        <input
-                          type="checkbox"
-                          checked={groupSelection.includes(area)}
-                          onChange={() =>
-                            setGroupSelection((current) =>
-                              current.includes(area)
-                                ? current.filter((item) => item !== area)
-                                : [...current, area],
-                            )
-                          }
-                        />
-                        <span>{area}<small>{areaMacro(area)}</small></span>
-                      </label>
-                    ))}
-                  </div>
-                  <button className="secondary" onClick={createNeighborhoodGroup}>
-                    <Plus /> Criar grupo com {groupSelection.length} bairros
-                  </button>
-                  {!!form.neighborhoodGroups.length && (
-                    <div className="createdGroups">
-                      {form.neighborhoodGroups.map((group) => (
-                        <span key={group.name}>
-                          <b>{group.name}</b>
-                          <small>{group.areas.join(" + ")}</small>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                </div>
-                <div
-                  className={`quotaCheck ${
-                    quotaTotal === form.target && form.target > 0
-                      ? "valid"
-                      : ""
-                  }`}
-                >
-                  {quotaTotal === form.target && form.target > 0 ? (
-                    <CheckCircle2 />
-                  ) : (
-                    <AlertTriangle />
-                  )}
-                  <span>
-                    <b>Soma das cotas: {quotaTotal}</b>
-                    <small>
-                      {quotaTotal === form.target && form.target > 0
-                        ? "Distribuição compatível com a amostra total."
-                        : `Ajuste as cotas para totalizar ${form.target || 0} entrevistas.`}
-                    </small>
-                  </span>
-                </div>
-              </section>
+              <LocalityDistribution target={form.target} quotas={form.quotas} options={localityOptions}
+                onChange={(quotas) => setForm((current) => ({ ...current, quotas }))} />
               <section className="formSection">
                 <div className="sectionTitle">
                   <div>
@@ -2566,8 +2486,34 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                     {form.selected.length} de {form.questionTarget || 0} selecionadas
                   </b>
                 </div>
+                {(() => {
+                  const questionCityOptions = Array.from(
+                    new Set(questions.map((q) => q.city).filter(Boolean) as string[]),
+                  ).sort((a, b) => a.localeCompare(b, "pt-BR"));
+                  return !!questionCityOptions.length && (
+                    <label className="blockFilter questionCityFilter">
+                      Filtrar por cidade
+                      <select
+                        value={questionCityFilter}
+                        onChange={(e) => setQuestionCityFilter(e.target.value)}
+                      >
+                        <option>Todas</option>
+                        {questionCityOptions.map((city) => (
+                          <option key={city}>{city}</option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })()}
                 <div className="questionBank">
-                  {questions.map((q) => (
+                  {questions
+                    .filter(
+                      (q) =>
+                        q.mandatory ||
+                        questionCityFilter === "Todas" ||
+                        q.city === questionCityFilter,
+                    )
+                    .map((q) => (
                     <label
                       key={q.id}
                       className={form.selected.includes(q.id) ? "picked" : ""}
@@ -2575,11 +2521,14 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                       <input
                         type="checkbox"
                         checked={form.selected.includes(q.id)}
+                        disabled={!!q.mandatory}
                         onChange={() => toggle(q.id)}
                       />
                       <span>
                         <small>
                           {q.id} · {q.block}
+                          {q.city ? ` · ${q.city}` : ""}
+                          {q.mandatory ? " · Obrigatória" : ""}
                         </small>
                         <b>{q.text}</b>
                         <em>{q.type}</em>
@@ -2759,7 +2708,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
         </div>
       )}
       {editing && (
-        <div className="modalShade" onMouseDown={() => setEditing(null)}>
+        <div className="modalShade" onMouseDown={closeEditing}>
           <div
             className="questionView"
             onMouseDown={(e) => e.stopPropagation()}
@@ -2815,6 +2764,50 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                   <h3>1. Dados da pesquisa</h3>
                   <div className="formGrid">
                     <label>
+                      Número da pesquisa
+                      <input
+                        value={editing.number}
+                        onChange={(e) =>
+                          updateEditing({ number: e.target.value })
+                        }
+                        placeholder="Ex.: 005/2026"
+                      />
+                    </label>
+                    <label>
+                      Nome da pesquisa
+                      <input
+                        value={editing.title}
+                        onChange={(e) =>
+                          updateEditing({ title: e.target.value })
+                        }
+                        placeholder="Ex.: Avaliação da gestão"
+                      />
+                    </label>
+                    <label>
+                      Cliente / contratante
+                      <input
+                        value={editing.client || ""}
+                        onChange={(e) =>
+                          updateEditing({ client: e.target.value })
+                        }
+                        placeholder="Nome ou razão social do cliente"
+                      />
+                    </label>
+                    <label>
+                      Município
+                      <select
+                        value={editing.city || "Bonito/PE"}
+                        onChange={(e) =>
+                          updateEditing({ city: e.target.value })
+                        }
+                      >
+                        <option>Bonito/PE</option>
+                      </select>
+                      <small className="fieldHint">
+                        Carregado da base territorial cadastrada
+                      </small>
+                    </label>
+                    <label>
                       Tipo
                       <select
                         value={editing.type}
@@ -2826,19 +2819,6 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                         <option>Perfil de gestão</option>
                         <option>Mista</option>
                       </select>
-                    </label>
-                    <label>
-                      Quantidade de perguntas
-                      <input
-                        type="number"
-                        min="0"
-                        value={editing.questionTarget || 0}
-                        onChange={(e) =>
-                          updateEditing({
-                            questionTarget: Number(e.target.value),
-                          })
-                        }
-                      />
                     </label>
                     <label>
                       Início
@@ -2862,169 +2842,160 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                         placeholder="Ex.: 10/01/2026"
                       />
                     </label>
-                  </div>
-                </section>
-                <section className="formSection">
-                  <div className="sectionTitle">
-                    <div>
-                      <h3>2. Juntar localidades</h3>
-                      <p>
-                        Reúna bairros já selecionados nesta pesquisa em um
-                        grupo (precisam ser da mesma macroárea).
-                      </p>
-                    </div>
-                  </div>
-                  {editingUngroupedAreas.length < 2 ? (
-                    <p className="agentHint">
-                      É preciso ao menos duas localidades sem grupo para
-                      criar um novo grupo.
-                    </p>
-                  ) : (
-                    <>
-                      <label className="agentManualAreas">
-                        Nome do grupo
-                        <input
-                          value={editingGroupName}
-                          onChange={(e) =>
-                            setEditingGroupName(e.target.value)
-                          }
-                          placeholder="Ex.: Boa Vista / Zé Batista"
-                        />
-                      </label>
-                      <div className="agentAreaCascade">
-                        {Array.from(
-                          new Set(
-                            editingUngroupedAreas.map(editingEntityMacro),
-                          ),
-                        ).map((district) => {
-                          const areasInDistrict = editingUngroupedAreas.filter(
-                            (area) => editingEntityMacro(area) === district,
-                          );
-                          const expanded =
-                            expandedGroupDistricts.includes(district);
-                          const pickedCount = areasInDistrict.filter((area) =>
-                            editingGroupSelection.includes(area),
-                          ).length;
-                          return (
-                            <div
-                              key={district}
-                              className={
-                                "cascadeGroup" + (expanded ? " expanded" : "")
-                              }
-                            >
-                              <button
-                                className="cascadeHead"
-                                onClick={() =>
-                                  toggleGroupDistrictExpand(district)
-                                }
-                              >
-                                <ChevronDown className="cascadeChevron" />
-                                <span>{district}</span>
-                                <small>
-                                  {pickedCount}/{areasInDistrict.length}
-                                </small>
-                              </button>
-                              {expanded && (
-                                <div className="questionBank cascadeBody">
-                                  {areasInDistrict.map((area) => (
-                                    <label
-                                      key={area}
-                                      className={
-                                        editingGroupSelection.includes(area)
-                                          ? "picked"
-                                          : ""
-                                      }
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={editingGroupSelection.includes(
-                                          area,
-                                        )}
-                                        onChange={() =>
-                                          setEditingGroupSelection(
-                                            (current) =>
-                                              current.includes(area)
-                                                ? current.filter(
-                                                    (a) => a !== area,
-                                                  )
-                                                : [...current, area],
-                                          )
-                                        }
-                                      />
-                                      <span>{area}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="agentSubmitRow">
-                        <button
-                          className="secondary"
-                          onClick={createEditingNeighborhoodGroup}
-                        >
-                          <Plus /> Criar grupo
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  {!!(editing.neighborhoodGroups || []).length && (
-                    <div className="candidateList">
-                      {(editing.neighborhoodGroups || []).map((group) => (
-                        <article key={group.name}>
-                          <span>
-                            <small>{group.macro}</small>
-                            <b>{group.name}</b>
-                            <em>{group.areas.join(", ")}</em>
-                          </span>
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </section>
-                <section className="formSection">
-                  <div className="sectionTitle">
-                    <div>
-                      <h3>3. Cargos</h3>
-                      <p>
-                        Cargos disponíveis para cadastro de candidatos e
-                        apoios nesta e nas próximas pesquisas.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="agentFields">
                     <label>
-                      Novo cargo
+                      Total de pessoas a entrevistar
                       <input
-                        value={newCargo}
-                        onChange={(e) => setNewCargo(e.target.value)}
-                        placeholder="Ex.: Delegado"
+                        type="number"
+                        min="0"
+                        value={editing.target || ""}
+                        onChange={(e) =>
+                          updateEditing({
+                            target: Math.max(0, Math.floor(Number(e.target.value))),
+                          })
+                        }
+                        placeholder="Ex.: 350"
                       />
                     </label>
-                    <button
-                      className="secondary"
-                      onClick={() => {
-                        if (!newCargo.trim()) return;
-                        addCargo(newCargo.trim());
-                        setNewCargo("");
-                      }}
-                    >
-                      <Plus /> Adicionar
-                    </button>
-                  </div>
-                  <div className="agentCardAreas cargoList">
-                    {cargos.map((cargo) => (
-                      <span key={cargo} className="agentAreaChip cargoChip">
-                        {cargo}
-                        <button onClick={() => removeCargo(cargo)}>×</button>
-                      </span>
-                    ))}
+                    <label>
+                      Quantidade de perguntas
+                      <input
+                        type="number"
+                        min="0"
+                        value={editing.questionTarget || 0}
+                        onChange={(e) =>
+                          updateEditing({
+                            questionTarget: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
                   </div>
                 </section>
+                <LocalityDistribution target={editing.target || 0} quotas={editing.quotas || {}} options={editingLocalityOptions}
+                  onChange={(quotas) => updateEditing({ quotas })} />
+                {!distributionValid(editing.target || 0, editing.quotas || {}) && (
+                  <div className="distributionPending">
+                    <p>As alterações ficam pendentes até a soma das entrevistas fechar com o total informado.</p>
+                    <button className="secondary" onClick={() => setEditing(null)}>Descartar alterações pendentes e fechar</button>
+                  </div>
+                )}
+
+
               </div>
             ) : modalTab === "questionario" ? (
+              <>
+                <div className="sectionTitle">
+                  <div>
+                    <h3>Questionário</h3>
+                    <p>
+                      Organize a ordem das perguntas e revise o conteúdo do
+                      questionário.
+                    </p>
+                  </div>
+                  <div className="printButtonGroup">
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        setPrintRequest({ view: "campo", id: Date.now() })
+                      }
+                    >
+                      <Printer /> Imprimir questionário de campo
+                    </button>
+                  </div>
+                </div>
+                {printRequest?.view === "campo" &&
+                  createPortal(
+                  <div className="reportPrintArea fieldQuestionnairePrint">
+                    <div className="fieldPrintHeader">
+                      <div className="fieldPrintHeaderRow">
+                        <span>
+                          MUNICÍPIO: {(editing.city || "").split("/")[0] || "—"}
+                          {" - "}
+                          {(editing.city || "").split("/")[1] || "—"}
+                        </span>
+                        <span>
+                          Período:{" "}
+                          {editing.start ? formatDateBR(editing.start) : "—"} a{" "}
+                          {editing.end ? formatDateBR(editing.end) : "—"}
+                        </span>
+                      </div>
+                      <div className="fieldPrintHeaderRow">
+                        <span>PESQUISA Nº {editing.number}</span>
+                        <span>Localidade: ________________________</span>
+                      </div>
+                    </div>
+                    <p className="fieldGreeting">
+                      Bom dia/ Boa tarde. Meu nome é ________, sou do
+                      Instituto {letterhead.name || "________"} e estou
+                      realizando uma pesquisa na sua cidade. Gostaria de
+                      esclarecer que o(a) Sr.(a) não assumirá nenhum
+                      compromisso ao responder este questionário.
+                    </p>
+                    {editing.questions
+                      .map((id) => questions.find((x) => x.id === id))
+                      .filter((q): q is Question => !!q?.eliminatory)
+                      .map((q) => (
+                        <div key={q.id} className="fieldEliminatoryBlock">
+                          <b>PERGUNTA ELIMINATÓRIA</b>
+                          <p>{resolveQuestion(q.text, editing.variables?.[q.id])}</p>
+                          {!!q.options?.length && (
+                            <ul className="fieldOptionList">
+                              {q.options.map((option, i) => (
+                                <li key={option}>
+                                  [ ] {i + 1}) {option}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ))}
+                    <div className="fieldQuestionList">
+                      {editing.questions
+                        .map((id) => questions.find((x) => x.id === id))
+                        .filter(
+                          (q): q is Question =>
+                            !!q && !q.eliminatory && !q.identification,
+                        )
+                        .map((q, index) => (
+                          <div key={q.id} className="fieldQuestionBlock">
+                            <p className="fieldQuestionText">
+                              {index + 1}.{" "}
+                              {resolveQuestion(q.text, editing.variables?.[q.id])}
+                            </p>
+                            {q.options?.length ? (
+                              <ul className="fieldOptionList">
+                                {q.options.map((option, i) => (
+                                  <li key={option}>
+                                    [ ] {i + 1}) {option}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="fieldOpenAnswer">
+                                Resposta: ______________________________________
+                              </p>
+                            )}
+                            <div className="fieldDivider">----------</div>
+                          </div>
+                        ))}
+                    </div>
+                    <div className="fieldIdBlock">
+                      <p>Nome do Entrevistado: ______________________________________</p>
+                      <p>Endereço: Rua ____________________________ Nº ________</p>
+                      <p>
+                        A P&S pede aos entrevistados um número de telefone,
+                        para confirmar se foi feita a pesquisa. Qual o número
+                        que o Sr.(a) dá para a P&S? (caso o entrevistado se
+                        recuse, não insistir)
+                      </p>
+                      <p className="fieldIdRow">
+                        <span>Telefone: ________________</span>
+                        <span>Entrevistador(a): ________________</span>
+                      </p>
+                    </div>
+                  </div>,
+                  document.body,
+                )}
               <div className="questionViewList">
                 {questionnaireLocked && (
                   <p className="agentHint questionLockNotice">
@@ -3037,8 +3008,8 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                 {editing.questions.map((id, i) => {
                   const q = questions.find((x) => x.id === id);
                   return (
+                    <Fragment key={id}>
                     <div
-                      key={id}
                       draggable={!questionnaireLocked}
                       className={
                         draggedEditingQuestion === id ? "dragging" : ""
@@ -3097,10 +3068,14 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                         </button>
                       )}
                     </div>
+                    {!questionnaireLocked &&
+                      questionEdit?.id === id &&
+                      questionEditPanel}
+                    </Fragment>
                   );
                 })}
-                {!questionnaireLocked && questionEditPanel}
               </div>
+              </>
             ) : modalTab === "agentes" ? (
               <div className="agentLaunch">
                 <div className="sectionTitle">
@@ -3331,6 +3306,12 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                       Campo. Redefina a senha ou bloqueie o acesso quando
                       necessário.
                     </p>
+                    <p className="agentHint">
+                      Por segurança, a senha só fica visível na hora em que é
+                      gerada — ao recarregar a página ela some daqui (o login
+                      continua funcionando normalmente). Clique em "Redefinir
+                      senha" quando precisar ver uma senha válida de novo.
+                    </p>
                   </div>
                   <b>
                     {(editing.agents || []).filter((agent) => agent.login)
@@ -3376,7 +3357,13 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                           </span>
                           <span className="accessCreds">
                             <small>SENHA</small>
-                            <b>{agent.password}</b>
+                            {agent.password ? (
+                              <b>{agent.password}</b>
+                            ) : (
+                              <em className="accessCredsHidden">
+                                Gere uma nova para ver
+                              </em>
+                            )}
                           </span>
                           <span
                             className={
@@ -3439,7 +3426,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                       {trackAreaOptions.map((area) => {
                         const areaQuota = editing.quotas?.[area] || 0;
                         const areaDone = (editing.interviews || []).filter(
-                          (iv) => iv.locality === area,
+                          (iv) => sameLocality(iv.locality, area),
                         ).length;
                         const areaComplete =
                           areaQuota > 0 && areaDone >= areaQuota;
@@ -4119,6 +4106,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                         />
                       </label>
                     </div>
+                    {createPortal(
                     <div className="reportPrintArea resultLandscape">
                       <div className="resultCover">
                         <div className="resultLetterhead">
@@ -4243,7 +4231,9 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                           ),
                         )
                       )}
-                    </div>
+                    </div>,
+                    document.body,
+                    )}
                   </>
                 )}
               </div>
@@ -4265,7 +4255,8 @@ function AgentCoverageMap({
   const streets = useMemo(
     () =>
       streetCoordinates.filter((street) =>
-        agent.areas.includes(street.neighborhood || street.district),
+        agent.areas.includes(localityKey(street)) ||
+        (street.district === "ESTREITO DO NORTE" && agent.areas.includes("ZONA RURAL")),
       ),
     [agent.areas],
   );
@@ -4361,6 +4352,127 @@ type AgentMapPoint={id:string;name:string;lat:number;lng:number;area:string;comp
 function MapResize(){const map=useMap();useEffect(()=>{const resize=()=>setTimeout(()=>map.invalidateSize(),100);document.addEventListener('fullscreenchange',resize);return()=>document.removeEventListener('fullscreenchange',resize)},[map]);return null}
 function CoverageMap(){const mapRef=useRef<HTMLDivElement>(null);const [query,setQuery]=useState('');const [showStreets,setShowStreets]=useState(true);const [showLines,setShowLines]=useState(false);const agents=useMemo<AgentMapPoint[]>(()=>{try{return JSON.parse(localStorage.getItem('pulso-agent-locations')||'[]')}catch{return[]}},[]);const filteredStreets=streetCoordinates.filter(street=>`${street.name} ${street.neighborhood} ${street.district}`.toLocaleLowerCase('pt-BR').includes(query.toLocaleLowerCase('pt-BR')));const center=useMemo<[number,number]>(()=>{const valid=streetCoordinates.filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lng));return [valid.reduce((s,x)=>s+x.lat,0)/valid.length,valid.reduce((s,x)=>s+x.lng,0)/valid.length]},[]);const fullscreen=()=>{if(!document.fullscreenElement)mapRef.current?.requestFullscreen();else document.exitFullscreen()};return <div className="content coveragePage"><div className="coverageHeader"><div><p className="eyebrow">OPERAÇÃO TERRITORIAL</p><h1>Mapa de cobertura</h1><p>Ruas georreferenciadas, agentes em campo e andamento da coleta.</p></div><div className="coverageMetrics"><span><b>{streetCoordinates.length}</b> ruas com coordenadas</span><span><b>{agents.length}</b> agentes com GPS</span></div></div><div className="mapWorkspace"><aside className="mapSide"><label><Search/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar rua ou bairro..."/></label><div className="mapLayerTitle"><Layers3/> Camadas do mapa</div><button className={showStreets?'on':''} onClick={()=>setShowStreets(!showStreets)}><i className="layerDot streetDot"/><span><b>Pontos centrais das ruas</b><small>{filteredStreets.length} visíveis</small></span></button><button className={showLines?'on':''} onClick={()=>setShowLines(!showLines)}><i className="layerDot lineDot"/><span><b>Traçado das ruas</b><small>Geometria importada do KML</small></span></button><button className="on"><i className="layerDot agentDot"/><span><b>Agentes em campo</b><small>{agents.length?`${agents.length} com GPS ativo`:'Aguardando check-ins reais'}</small></span></button><div className="mapStatus"><ShieldCheck/><p><b>Base geográfica vinculada</b><span>633 de 636 ruas receberam latitude e longitude. Três ficaram pendentes para revisão manual.</span></p></div>{!agents.length&&<div className="noAgentGps"><MapPin/><p><b>Nenhum agente com localização ativa</b><span>Os cartões aparecerão ao passar o mouse sobre os pontos após o primeiro check-in GPS.</span></p></div>}</aside><div className="leafletShell" ref={mapRef}><button className="expandMap" onClick={fullscreen}><Maximize2/> Expandir mapa</button><MapContainer center={center} zoom={14} className="coverageLeaflet" zoomControl={true}><MapResize/><TileLayer attribution='Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics' url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"/>{showLines&&filteredStreets.map(street=><Polyline key={`line-${street.id}`} positions={street.line.map(point=>[point[1],point[0]] as [number,number])} pathOptions={{color:'#e3b341',weight:2,opacity:.78}}/>)}{showStreets&&filteredStreets.map(street=><CircleMarker key={street.id} center={[street.lat,street.lng]} radius={3} pathOptions={{color:'#201d17',fillColor:'#e7b746',fillOpacity:.9,weight:1}}><Tooltip direction="top" offset={[0,-4]} opacity={1}><div className="streetTooltip"><small>LOGRADOURO</small><b>{street.name}</b><span>{street.neighborhood||street.district} · {street.cep||'CEP não informado'}</span><em>{street.lat.toFixed(6)}, {street.lng.toFixed(6)}</em></div></Tooltip></CircleMarker>)}{agents.map(agent=><CircleMarker key={agent.id} center={[agent.lat,agent.lng]} radius={9} pathOptions={{color:'#fff',fillColor:'#45a060',fillOpacity:1,weight:3}}><Tooltip direction="top" offset={[0,-8]} opacity={1}><div className="agentTooltip"><div><i>{agent.name.split(' ').map(x=>x[0]).join('').slice(0,2)}</i><span><small>AGENTE EM CAMPO</small><b>{agent.name}</b></span></div><p><span>Localidade <b>{agent.area}</b></span><span>Andamento <b>{agent.completed} de {agent.target}</b></span><span>Status <b>{agent.status}</b></span><span>Atualizado <b>{agent.updatedAt}</b></span></p><progress value={agent.completed} max={agent.target}/></div></Tooltip></CircleMarker>)}</MapContainer><div className="mapAttribution">Imagem de satélite · Esri World Imagery</div></div></div><div className="mapImportNote"><CheckCircle2/><span><b>Coordenadas importadas sem alterar os cadastros existentes.</b> O vínculo utilizou nome + CEP e, quando necessário, somente CEP ou nome atual.</span></div></div>}
 
+const streetNames = Array.from(
+  new Set(streetCoordinates.map((s) => s.name).filter(Boolean)),
+).sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+function AddressField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const parsed = useRef((() => {
+    const m = /^Rua: (.*?)(?: - Nº (.*))?$/.exec(value || "");
+    const street = m?.[1] || "";
+    return { street, number: m?.[2] || "", knownStreet: streetNames.includes(street) };
+  })()).current;
+  const [query, setQuery] = useState("");
+  const [selectedStreet, setSelectedStreet] = useState<string | null>(
+    parsed.knownStreet ? parsed.street : null,
+  );
+  const [notFound, setNotFound] = useState(!!parsed.street && !parsed.knownStreet);
+  const [manualStreet, setManualStreet] = useState(
+    !parsed.knownStreet ? parsed.street : "",
+  );
+  const [houseNumber, setHouseNumber] = useState(parsed.number);
+  const [open, setOpen] = useState(false);
+
+  const matches =
+    query.trim().length >= 2
+      ? streetNames
+          .filter((name) => name.toLowerCase().includes(query.trim().toLowerCase()))
+          .slice(0, 8)
+      : [];
+
+  useEffect(() => {
+    const street = notFound ? manualStreet.trim() : selectedStreet;
+    if (street) {
+      onChange(`Rua: ${street}${houseNumber.trim() ? ` - Nº ${houseNumber.trim()}` : ""}`);
+    } else {
+      onChange("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStreet, notFound, manualStreet, houseNumber]);
+
+  return (
+    <div className="addressField">
+      {!notFound ? (
+        <div className="addressAutocomplete">
+          <input
+            className="agentAnswerInput"
+            value={selectedStreet ?? query}
+            onChange={(e) => {
+              setSelectedStreet(null);
+              setQuery(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            placeholder="Digite o nome da rua..."
+          />
+          {open && (
+            <div className="addressSuggestions">
+              {matches.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => {
+                    setSelectedStreet(name);
+                    setQuery(name);
+                    setOpen(false);
+                  }}
+                >
+                  {name}
+                </button>
+              ))}
+              {query.trim().length >= 2 && (
+                <button
+                  type="button"
+                  className="addressNotFoundOption"
+                  onClick={() => {
+                    setNotFound(true);
+                    setOpen(false);
+                  }}
+                >
+                  Rua não encontrada — digitar manualmente
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="addressManual">
+          <input
+            className="agentAnswerInput"
+            value={manualStreet}
+            onChange={(e) => setManualStreet(e.target.value)}
+            placeholder="Nome da rua"
+          />
+          <button
+            type="button"
+            className="linkBtn"
+            onClick={() => {
+              setNotFound(false);
+              setManualStreet("");
+              setQuery("");
+              setSelectedStreet(null);
+            }}
+          >
+            ← Voltar para a busca
+          </button>
+        </div>
+      )}
+      <input
+        className="agentAnswerInput"
+        value={houseNumber}
+        onChange={(e) => setHouseNumber(e.target.value)}
+        placeholder="Número da casa"
+      />
+    </div>
+  );
+}
+
 function AgentApp({
   back,
   online,
@@ -4377,11 +4489,71 @@ function AgentApp({
     agentId: string;
   } | null>(null);
   const [loginForm, setLoginForm] = useState({ login: "", password: "" });
+  const [toast, setToast] = useState("");
+  const notify = (m: string) => {
+    setToast(m);
+    setTimeout(() => setToast(""), 2500);
+  };
   const [locality, setLocality] = useState("");
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string | string[]>>(
     {},
   );
+  const [justFinished, setJustFinished] = useState(false);
+  const [interviewStarted, setInterviewStarted] = useState(false);
+  // Entrevistas que não conseguiram sincronizar com o Supabase (offline ou
+  // servidor fora do ar). Ficam guardadas aqui — e em localStorage, para
+  // sobreviver a um fechamento do app — até serem reenviadas com sucesso.
+  // Não guardamos login/senha junto (por segurança); o reenvio só acontece
+  // enquanto a sessão atual ainda tem as credenciais em memória (voltou a
+  // ficar online sem sair do app) ou logo após um novo login do mesmo agente.
+  const [pendingInterviews, setPendingInterviews] = useState<
+    Array<{ id: string; researchId: number; agentId: string; interview: Interview }>
+  >(() => {
+    try {
+      const raw = localStorage.getItem("pulso-pending-interviews");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const queueInterview = (researchId: number, agentId: string, interview: Interview) => {
+    setPendingInterviews((current) => {
+      const next = [...current, { id: interview.id, researchId, agentId, interview }];
+      localStorage.setItem("pulso-pending-interviews", JSON.stringify(next));
+      return next;
+    });
+  };
+  const flushPendingInterviews = async (login: string, password: string, researchId: number, agentId: string) => {
+    const mine = pendingInterviews.filter(
+      (p) => p.researchId === researchId && p.agentId === agentId,
+    );
+    if (!mine.length) return;
+    let sent = 0;
+    for (const item of mine) {
+      const { error } = await supabase.rpc("pulso_agent_submit_interview", {
+        p_login: login,
+        p_password: password,
+        p_interview: item.interview,
+      });
+      if (error) continue;
+      sent++;
+      setPendingInterviews((current) => {
+        const next = current.filter((p) => p.id !== item.id);
+        localStorage.setItem("pulso-pending-interviews", JSON.stringify(next));
+        return next;
+      });
+    }
+    if (sent) notify(`${sent} entrevista${sent > 1 ? "s" : ""} pendente${sent > 1 ? "s" : ""} enviada${sent > 1 ? "s" : ""} ao servidor`);
+  };
+  // Assim que a conexão volta (sem precisar sair e logar de novo), tenta
+  // reenviar o que ficou pendente usando as credenciais ainda em memória.
+  useEffect(() => {
+    if (online && session && loginForm.password) {
+      flushPendingInterviews(loginForm.login.trim(), loginForm.password, session.researchId, session.agentId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [online]);
 
   const research = researches.find((r) => r.id === session?.researchId);
   const agent = research?.agents?.find((a) => a.id === session?.agentId);
@@ -4396,9 +4568,11 @@ function AgentApp({
       setResearches([data.research]); setBank(data.questions || []);
       const next = { researchId: data.research.id, agentId: data.agent.id };
       setSession(next); localStorage.setItem("pulso-agent-session", JSON.stringify(next));
-      act(`Bem-vindo(a), ${data.agent.name.split(" ")[0]}`); return;
+      notify(`Bem-vindo(a), ${data.agent.name.split(" ")[0]}`);
+      flushPendingInterviews(loginForm.login.trim(), loginForm.password, data.research.id, data.agent.id);
+      return;
     }
-    act("Login ou senha inválidos");
+    notify("Login ou senha inválidos");
   };
   const logout = () => {
     setSession(null);
@@ -4406,6 +4580,8 @@ function AgentApp({
     setLocality("");
     setStepIndex(0);
     setAnswers({});
+    setJustFinished(false);
+    setInterviewStarted(false);
   };
 
   const activeQuestions = research
@@ -4414,21 +4590,34 @@ function AgentApp({
         .filter(Boolean) as Question[])
     : [];
   const currentQuestion = activeQuestions[stepIndex];
-  const quota =
-    agent && research
-      ? agent.areas.reduce(
-          (sum, area) => sum + Number(research.quotas?.[area] || 0),
-          0,
-        )
-      : 0;
+  const quotaForArea = (quotas: Record<string, number> | undefined, area: string) => {
+    if (!quotas) return 0;
+    const key = Object.keys(quotas).find((k) => sameLocality(k, area));
+    return key ? Number(quotas[key] || 0) : 0;
+  };
+  const agentAreaQuota = (area: string) => {
+    const total = quotaForArea(research?.quotas, area);
+    const coveringCount =
+      (research?.agents || []).filter((a) =>
+        a.areas.some((x) => sameLocality(x, area)),
+      ).length || 1;
+    return Math.ceil(total / coveringCount);
+  };
+  const quota = agent
+    ? agent.areas.reduce((sum, area) => sum + agentAreaQuota(area), 0)
+    : 0;
   const completed = agent?.completed || 0;
   const pct = quota ? Math.min(100, Math.round((completed / quota) * 100)) : 0;
-  const localityQuota = research?.quotas?.[locality] || 0;
+  const localityQuota = agentAreaQuota(locality);
   const localityCompleted = (research?.interviews || []).filter(
-    (iv) => iv.agentId === agent?.id && iv.locality === locality,
+    (iv) => iv.agentId === agent?.id && sameLocality(iv.locality, locality),
   ).length;
   const localityQuotaReached =
     localityQuota > 0 && localityCompleted >= localityQuota;
+  const researchFinished =
+    !!research &&
+    (research.status !== "Ativa" ||
+      ((research.target || 0) > 0 && (research.responses || 0) >= (research.target || 0)));
   const isAnswered = (q: Question) => {
     const value = answers[q.id];
     return Array.isArray(value)
@@ -4454,7 +4643,7 @@ function AgentApp({
       return { ...current, [currentQuestion.id]: next };
     });
   };
-  const submitInterview = () => {
+  const submitInterview = async () => {
     if (!research || !agent) return;
     const interview = {
       id: String(Date.now()),
@@ -4484,13 +4673,34 @@ function AgentApp({
           : r,
       ),
     );
-    setStepIndex(0);
     setAnswers({});
-    act("Entrevista salva");
+    setJustFinished(true);
+    setInterviewStarted(false);
+    const { error } = await supabase.rpc("pulso_agent_submit_interview", {
+      p_login: loginForm.login.trim(),
+      p_password: loginForm.password,
+      p_interview: interview,
+    });
+    if (error) {
+      // Fica na fila de pendentes (persistida em localStorage) e será
+      // reenviada automaticamente quando a conexão voltar ou no próximo
+      // login — antes disso, a entrevista ficava só no state local e era
+      // perdida de vez assim que o app buscasse o estado do servidor de novo.
+      queueInterview(research.id, agent.id, interview);
+      notify("Sem conexão com o servidor — a entrevista será reenviada automaticamente");
+      return;
+    }
+    notify("Entrevista salva");
   };
 
   return (
     <div className="agentApp">
+      {toast && (
+        <div className="toast">
+          <CheckCircle2 />
+          {toast}
+        </div>
+      )}
       <header>
         <div className="agentBrand">
           <div className="mark">P</div>
@@ -4542,6 +4752,15 @@ function AgentApp({
               <UserRoundCheck /> Entrar
             </button>
           </>
+        ) : researchFinished ? (
+          <div className="agentHello agentFinished">
+            <CheckCircle2 className="agentFinishedIcon" />
+            <h1>Parabéns, você terminou!</h1>
+            <p>
+              Você concluiu todas as entrevistas que tinha para esta
+              pesquisa. Obrigado pela participação!
+            </p>
+          </div>
         ) : !locality ? (
           <>
             <div className="agentHello">
@@ -4551,9 +4770,9 @@ function AgentApp({
             </div>
             <section className="routeCard agentLocalityCard">
               {agent.areas.map((area) => {
-                const areaQuota = research.quotas?.[area] || 0;
+                const areaQuota = agentAreaQuota(area);
                 const areaCompleted = (research.interviews || []).filter(
-                  (iv) => iv.agentId === agent.id && iv.locality === area,
+                  (iv) => iv.agentId === agent.id && sameLocality(iv.locality, area),
                 ).length;
                 const areaDone = areaQuota > 0 && areaCompleted >= areaQuota;
                 return (
@@ -4575,6 +4794,21 @@ function AgentApp({
               })}
             </section>
           </>
+        ) : justFinished ? (
+          <div className="agentHello agentFinished">
+            <CheckCircle2 className="agentFinishedIcon" />
+            <h1>Entrevista finalizada!</h1>
+            <p>As respostas foram salvas com sucesso.</p>
+            <button
+              className="startBtn"
+              onClick={() => {
+                setStepIndex(0);
+                setJustFinished(false);
+              }}
+            >
+              <UserRoundCheck /> Começar novo questionário
+            </button>
+          </div>
         ) : !activeQuestions.length ? (
           <div className="agentHello">
             <p className="eyebrow">{locality}</p>
@@ -4585,32 +4819,85 @@ function AgentApp({
             </p>
           </div>
         ) : localityQuotaReached ? (
+          <>
+            <div className="agentHello">
+              <p className="eyebrow">{locality}</p>
+              <h1>Meta desta localidade atingida</h1>
+              <p>
+                Você já completou {localityCompleted} de {localityQuota}{" "}
+                entrevistas nesta localidade.
+                {agent.areas.length > 1
+                  ? " Escolha a próxima localidade:"
+                  : ""}
+              </p>
+            </div>
+            {agent.areas.length > 1 ? (
+              <section className="routeCard agentLocalityCard">
+                {agent.areas.map((area) => {
+                  const areaQuota = agentAreaQuota(area);
+                  const areaCompleted = (research.interviews || []).filter(
+                    (iv) =>
+                      iv.agentId === agent.id && sameLocality(iv.locality, area),
+                  ).length;
+                  const areaDone = areaQuota > 0 && areaCompleted >= areaQuota;
+                  return (
+                    <button
+                      key={area}
+                      disabled={areaDone}
+                      onClick={() => {
+                        setLocality(area);
+                        setInterviewStarted(false);
+                      }}
+                    >
+                      <MapPin /> {area}
+                      {!!areaQuota && (
+                        <small>
+                          {areaDone
+                            ? "meta atingida"
+                            : `${areaCompleted}/${areaQuota}`}
+                        </small>
+                      )}
+                    </button>
+                  );
+                })}
+              </section>
+            ) : (
+              <p className="agentHint">
+                Você concluiu todas as suas localidades atribuídas.
+              </p>
+            )}
+          </>
+        ) : !interviewStarted ? (
           <div className="agentHello">
-            <p className="eyebrow">{locality}</p>
-            <h1>Meta desta localidade atingida</h1>
-            <p>
-              Você já completou {localityCompleted} de {localityQuota}{" "}
-              entrevistas nesta localidade. Escolha outra localidade para
-              continuar.
+            <p className="eyebrow">
+              {locality} · {quota ? `${completed} de ${quota}` : completed}{" "}
+              entrevistas
             </p>
+            <h1>Olá, {agent.name.split(" ")[0]}.</h1>
+            <p>Pronto para começar uma nova entrevista?</p>
             <button
               className="changeLocality"
-              onClick={() => setLocality("")}
+              onClick={() => { setLocality(""); setInterviewStarted(false); }}
             >
               Trocar localidade
+            </button>
+            <button
+              className="startBtn"
+              onClick={() => setInterviewStarted(true)}
+            >
+              <UserRoundCheck /> Iniciar entrevista
             </button>
           </div>
         ) : (
           <>
-            <div className="agentHello">
-              <p className="eyebrow">
-                {locality} · {quota ? `${completed} de ${quota}` : completed}{" "}
-                entrevistas
-              </p>
-              <h1>Olá, {agent.name.split(" ")[0]}.</h1>
+            <div className="agentQuestionMeta">
+              <span>
+                <MapPin /> {locality}
+                {quota ? ` · ${completed}/${quota}` : ` · ${completed}`}
+              </span>
               <button
                 className="changeLocality"
-                onClick={() => setLocality("")}
+                onClick={() => { setLocality(""); setInterviewStarted(false); }}
               >
                 Trocar localidade
               </button>
@@ -4685,6 +4972,12 @@ function AgentApp({
                   value={(answers[currentQuestion.id] as string) || ""}
                   onChange={(e) => setAnswer(e.target.value)}
                   placeholder="(00) 00000-0000"
+                />
+              ) : currentQuestion.type === "Endereço" ? (
+                <AddressField
+                  key={currentQuestion.id}
+                  value={(answers[currentQuestion.id] as string) || ""}
+                  onChange={setAnswer}
                 />
               ) : (
                 <textarea
