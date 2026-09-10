@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Plus, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, SlidersHorizontal, Users } from "lucide-react";
 import { distributeInterviews, distributionValid, localitySections, type LocalityOption } from "./localities";
 
 export function LocalityDistribution({ target, quotas, options, onChange }: {
@@ -19,6 +19,22 @@ export function LocalityDistribution({ target, quotas, options, onChange }: {
     const next = { ...quotas };
     if (key in next) delete next[key]; else next[key] = 0;
     onChange(next);
+  };
+  const ruralOptions = allOptions.filter((option) => option.section === "Zona Rural");
+  const selectedRural = ruralOptions.filter((option) => option.key in quotas);
+  const groupSelectedRural = () => {
+    if (selectedRural.length < 2) {
+      setError("Selecione ao menos duas localidades rurais para agrupar.");
+      return;
+    }
+    const label = selectedRural.map((option) => option.label).join("/");
+    const key = `ZONA RURAL — ${label}`;
+    const sum = selectedRural.reduce((total, option) => total + (quotas[option.key] || 0), 0);
+    const next = { ...quotas };
+    selectedRural.forEach((option) => delete next[option.key]);
+    next[key] = sum;
+    onChange(next);
+    setError("");
   };
   const addRural = () => {
     const name = ruralName.trim().replace(/\s+/g, " ");
@@ -58,7 +74,12 @@ export function LocalityDistribution({ target, quotas, options, onChange }: {
           }} />}
         </article>)}</div>}
         {section === "Zona Rural" && <div className="ruralLocalityForm">
-          <p>Se necessário, adicione localidades rurais e a quantidade de entrevistas.</p>
+          <p>Marque duas ou mais localidades acima e agrupe em uma única entrada, ou adicione uma nova localidade rural.</p>
+          <div>
+            <button type="button" className="secondary" disabled={selectedRural.length < 2} onClick={groupSelectedRural}>
+              <Users /> Agrupar{selectedRural.length >= 2 ? ` (${selectedRural.length}) selecionadas` : " selecionadas"}
+            </button>
+          </div>
           <div><label>Localidade rural<input value={ruralName} onChange={(event) => setRuralName(event.target.value)} placeholder="Nome da localidade" /></label>
           <label>Entrevistas<input type="number" min="0" step="1" value={ruralCount} onChange={(event) => setRuralCount(event.target.value)} placeholder="0" /></label>
           <button type="button" className="secondary" onClick={addRural}><Plus /> Adicionar localidade</button></div>
