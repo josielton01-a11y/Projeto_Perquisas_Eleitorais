@@ -1,5 +1,5 @@
 import { LocalityDistribution } from "./LocalityDistribution";
-import { buildLocalities, distributionValid, localityKey } from "./localities";
+import { buildLocalities, distributionValid, localityKey, localitySections } from "./localities";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -47,6 +47,7 @@ import {
   BarChart3,
   FileText,
   LogOut,
+  RefreshCw,
 } from "lucide-react";
 import streetsRaw from "../dados_entrada/ruas_bonito_geocodificadas.csv?raw";
 import streetCoordinates from "./data/streetCoordinates.json";
@@ -109,6 +110,136 @@ function Ring({ value }: { value: number }) {
       <div>
         {value}
         <small>%</small>
+      </div>
+    </div>
+  );
+}
+const chartPalette = [
+  "#c79a35", "#4b8c5e", "#3f6fb0", "#a2455e", "#8a5fb5",
+  "#c97b2e", "#3f9aa6", "#8a8f3f", "#b0557a", "#5f7bd0",
+];
+type ChartDatum = { label: string; value: number };
+type ChartType = "barras-h" | "barras-v" | "pizza" | "rosca";
+// Barras (deitadas, como já existia) ou em pé — mesmos dados, só muda a
+// orientação de acordo com o tipo de gráfico escolhido na aba Gráficos.
+function ChartBars({ data, vertical }: { data: ChartDatum[]; vertical?: boolean }) {
+  const max = Math.max(...data.map((d) => d.value), 1);
+  if (vertical) {
+    return (
+      <div className="chartBarsVertical">
+        {data.map((d) => (
+          <div className="chartBarVCol" key={d.label}>
+            <b>{d.value.toFixed(1).replace(".", ",")}%</b>
+            <div className="chartBarVTrack">
+              <i style={{ height: `${(d.value / max) * 100}%` }} />
+            </div>
+            <span>{d.label}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="reportBarList">
+      {data.map((d) => (
+        <div className="reportBarRow" key={d.label}>
+          <span>{d.label}</span>
+          <div className="reportBarTrack">
+            <i style={{ width: `${(d.value / max) * 100}%` }} />
+          </div>
+          <b>{d.value.toFixed(1).replace(".", ",")}%</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+// Pizza (ou rosca, com donut=true) via conic-gradient — mesmo truque já
+// usado no <Ring/> do dashboard, sem precisar de biblioteca de gráficos.
+function ChartPie({ data, donut }: { data: ChartDatum[]; donut?: boolean }) {
+  const total = data.reduce((sum, d) => sum + d.value, 0) || 1;
+  let acc = 0;
+  const stops = data.map((d, i) => {
+    const start = (acc / total) * 360;
+    acc += d.value;
+    const end = (acc / total) * 360;
+    return `${chartPalette[i % chartPalette.length]} ${start}deg ${end}deg`;
+  });
+  return (
+    <div className="chartPieWrap">
+      <div className="chartPie" style={{ background: `conic-gradient(${stops.join(", ")})` }}>
+        {donut && <div className="chartPieHole" />}
+      </div>
+      <div className="chartPieLegend">
+        {data.map((d, i) => (
+          <span key={d.label}>
+            <i style={{ background: chartPalette[i % chartPalette.length] }} />
+            {d.label} — {d.value.toFixed(1).replace(".", ",")}%
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+function renderChart(type: ChartType, data: ChartDatum[]) {
+  if (type === "barras-v") return <ChartBars data={data} vertical />;
+  if (type === "pizza") return <ChartPie data={data} />;
+  if (type === "rosca") return <ChartPie data={data} donut />;
+  return <ChartBars data={data} />;
+}
+const monthNamesPt = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+// "Julho/26" a partir de uma data "AAAA-MM-DD" — rótulo de cada rodada
+// (pesquisa) na comparação ao longo do tempo, igual ao exemplo do usuário.
+function roundLabel(value?: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
+  if (!match) return value || "—";
+  const [, year, month] = match;
+  return `${monthNamesPt[Number(month) - 1]}/${year.slice(-2)}`;
+}
+// Barras verticais agrupadas — uma pergunta, um cluster por opção de
+// resposta, uma barra colorida por rodada/pesquisa dentro do cluster, com o
+// valor em cima e a legenda das rodadas embaixo (comparação ao longo do
+// tempo, ex.: "Julho/26" vs "Setembro/26" lado a lado por opção).
+function ChartGroupedBars({
+  categories,
+  series,
+}: {
+  categories: string[];
+  series: { label: string; color: string; values: number[] }[];
+}) {
+  const max = Math.max(...series.flatMap((s) => s.values), 1);
+  return (
+    <div className="groupedBarChart">
+      <div className="groupedBarPlot">
+        {categories.map((cat, ci) => (
+          <div className="groupedBarCluster" key={cat}>
+            <div className="groupedBarBars">
+              {series.map((s, si) => (
+                <div className="groupedBarCol" key={si}>
+                  <b>{s.values[ci].toFixed(1).replace(".", ",")}</b>
+                  <div
+                    className="groupedBarTrack"
+                    style={{
+                      height: `${(s.values[ci] / max) * 100}%`,
+                      background: s.color,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            <span>{cat}</span>
+          </div>
+        ))}
+      </div>
+      <div className="groupedBarLegend">
+        {series.map((s, si) => (
+          <span key={si}>
+            <i style={{ background: s.color }} />
+            {s.label}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -255,20 +386,6 @@ export function App() {
       b = () => setOnline(false);
     addEventListener("online", a);
     addEventListener("offline", b);
-    navigator.serviceWorker
-      ?.getRegistrations()
-      .then((registrations) =>
-        Promise.all(registrations.map((registration) => registration.unregister())),
-      );
-    caches
-      ?.keys()
-      .then((keys) =>
-        Promise.all(
-          keys
-            .filter((key) => key.startsWith("pulso-"))
-            .map((key) => caches.delete(key)),
-        ),
-      );
     return () => {
       removeEventListener("online", a);
       removeEventListener("offline", b);
@@ -639,6 +756,7 @@ function Dashboard({
 
 function Module({ page, act, adminToken }: { page: string; act: (x: string) => void; adminToken: string }) {
   if (page === "Pesquisas") return <Researches act={act} adminToken={adminToken} />;
+  if (page === "Relatórios") return <Researches act={act} adminToken={adminToken} reportOnly />;
   if (page === "Banco de perguntas") return <QuestionBank adminToken={adminToken} act={act} />;
   if (page === "Território & cotas") return <Territory act={act} adminToken={adminToken} />;
   if (page === "Mapa de cobertura") return <CoverageMap />;
@@ -655,14 +773,6 @@ function Module({ page, act, adminToken }: { page: string; act: (x: string) => v
       "Callback telefônico",
       "Entrevistas rápidas",
       "Trilha de alterações",
-    ],
-    Relatórios: [
-      "Tabela por localidade",
-      "Gráficos",
-      "Comparar rodadas",
-      "Trajeto e cobertura",
-      "Check-ins em PDF",
-      "Respostas abertas",
     ],
     Simulações: [
       "Histórico eleitoral",
@@ -970,6 +1080,10 @@ type Research = {
     visitedStreets?: number[];
   }>;
   interviews?: Interview[];
+  // Correções manuais de grafia/exclusão das respostas de perguntas abertas
+  // (ver "Revisar respostas" no Resultado da pesquisa) — chave externa é o
+  // id da pergunta, interna é o texto cru (trim+minúsculas) da resposta.
+  openAnswerCorrections?: Record<string, Record<string, OpenAnswerCorrection>>;
 };
 type Question = {
   id: string;
@@ -978,12 +1092,118 @@ type Question = {
   type: string;
   vars: string[];
   options?: string[];
+  // Lista de sugestões pra perguntas de "Texto aberto" (ex.: problemas da
+  // localidade, nomes de candidato) — o agente digita e escolhe da lista, ou
+  // digita manualmente se não encontrar; continua sendo resposta aberta, só
+  // reduz erro de digitação. Editável no Banco de perguntas.
+  suggestions?: string[];
   eliminatory?: boolean;
   identification?: boolean;
   city?: string;
   mandatory?: boolean;
 };
 const closedQuestionTypes = ["Escolha única", "Múltipla escolha", "Escala"];
+// Percentual de cada opção de uma pergunta fechada sobre um conjunto de
+// entrevistas — extraída daqui pra ser reusada tanto no relatório de uma
+// pesquisa só quanto na comparação entre pesquisas diferentes (mesma conta).
+function computeQuestionRow(interviews: Interview[], q: Question) {
+  const withAnswer = interviews.filter((iv) => iv.answers[q.id] !== undefined);
+  const total = withAnswer.length;
+  const values = (q.options || []).map((option) => {
+    if (!total) return 0;
+    const count = withAnswer.filter((iv) => {
+      const answer = iv.answers[q.id];
+      return Array.isArray(answer) ? answer.includes(option) : answer === option;
+    }).length;
+    return Math.round((count / total) * 1000) / 10;
+  });
+  return { total, values };
+}
+type OpenAnswerCorrection = { label: string; excluded?: boolean };
+// Grafia corrigida (ou undefined se sem resposta ou marcada como "outras")
+// da resposta de uma entrevista pra uma pergunta aberta — aplica a correção
+// manual de "Revisar respostas" quando existir.
+function canonicalOpenAnswer(
+  iv: Interview,
+  questionId: string,
+  corrections: Record<string, OpenAnswerCorrection> | undefined,
+): string | undefined {
+  const raw = iv.answers[questionId];
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const key = trimmed.toLocaleLowerCase("pt-BR");
+  const correction = corrections?.[key];
+  if (correction?.excluded) return undefined;
+  return correction?.label?.trim() || trimmed;
+}
+// Mesma tabela cruzada localidade × resposta das perguntas fechadas (linhas
+// = áreas, colunas = valores de resposta, célula = % sobre o total daquela
+// área), só que os "valores de resposta" (equivalente a question.options)
+// são descobertos a partir do que os entrevistados de fato escreveram,
+// já com as correções de grafia/exclusão de "Revisar respostas" aplicadas —
+// duas chaves cruas diferentes corrigidas pro mesmo label viram uma coluna
+// só; uma marcada como excluded não entra em nenhuma coluna, só na nota de
+// transparência "N descartadas como 'outras'".
+function computeOpenAnswerTable(
+  interviews: Interview[],
+  areaGroups: { label: string; interviews: Interview[] }[],
+  q: Question,
+  corrections: Record<string, OpenAnswerCorrection> | undefined,
+) {
+  const rawGroups: Record<string, { label: string; count: number }> = {};
+  for (const iv of interviews) {
+    const raw = iv.answers[q.id];
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    const value = raw.trim();
+    const key = value.toLocaleLowerCase("pt-BR");
+    if (!rawGroups[key]) rawGroups[key] = { label: value, count: 0 };
+    rawGroups[key].count++;
+  }
+  let excludedCount = 0;
+  for (const [rawKey, group] of Object.entries(rawGroups)) {
+    if (corrections?.[rawKey]?.excluded) excludedCount += group.count;
+  }
+  const rawGroupList = Object.entries(rawGroups)
+    .map(([key, group]) => ({ key, ...group }))
+    .sort((a, b) => b.count - a.count);
+
+  const overallCounts: Record<string, number> = {};
+  const labelByKey: Record<string, string> = {};
+  for (const iv of interviews) {
+    const label = canonicalOpenAnswer(iv, q.id, corrections);
+    if (!label) continue;
+    const key = label.toLocaleLowerCase("pt-BR");
+    overallCounts[key] = (overallCounts[key] || 0) + 1;
+    if (!labelByKey[key]) labelByKey[key] = label;
+  }
+  const labelKeys = Object.keys(overallCounts).sort((a, b) => overallCounts[b] - overallCounts[a]);
+  const labels = labelKeys.map((key) => labelByKey[key]);
+
+  const computeRow = (rowInterviews: Interview[]) => {
+    const answered = rowInterviews
+      .map((iv) => canonicalOpenAnswer(iv, q.id, corrections))
+      .filter((v): v is string => !!v);
+    const total = answered.length;
+    const values = labelKeys.map((key) => {
+      if (!total) return 0;
+      const count = answered.filter((label) => label.toLocaleLowerCase("pt-BR") === key).length;
+      return Math.round((count / total) * 1000) / 10;
+    });
+    return { total, values };
+  };
+
+  return {
+    labels,
+    rows: areaGroups.map((group) => ({
+      area: group.label,
+      ...computeRow(group.interviews),
+    })),
+    totalRow: computeRow(interviews),
+    excludedCount,
+    rawGroupList,
+  };
+}
 const variableLabels: Record<string, string> = {
   candidato: "Nome do candidato ou pré-candidato",
   apoiador: "Nome do apoiador ou liderança",
@@ -1004,7 +1224,7 @@ const resolveQuestion = (
 function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string) => void }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [researches, setResearches] = useState<Research[]>([]);
-  const [draft, setDraft] = useState({ text: "", block: "Geral", type: "Texto aberto", options: ["", ""], eliminatory: false, city: "", mandatory: false });
+  const [draft, setDraft] = useState({ text: "", block: "Geral", type: "Texto aberto", options: ["", ""], suggestions: [] as string[], eliminatory: false, city: "", mandatory: false });
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
   const [blockFilter, setBlockFilter] = useState("Todos");
   const [cityFilter, setCityFilter] = useState("Todas");
@@ -1016,10 +1236,11 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
   };
   const add = () => {
     const options = closedQuestionTypes.includes(draft.type) ? draft.options.map(x=>x.trim()).filter(Boolean) : undefined;
+    const suggestions = draft.type === "Texto aberto" ? draft.suggestions.map(x=>x.trim()).filter(Boolean) : undefined;
     if (!draft.text.trim()) return act("Digite o texto da pergunta");
     if (closedQuestionTypes.includes(draft.type) && (!options || options.length < 2)) return act("Informe pelo menos duas opções");
-    const question: Question = { id: `Q${Date.now()}`, block: draft.block, text: draft.text.trim(), type: draft.type, vars: [], options, eliminatory: draft.eliminatory, city: draft.city.trim() || undefined, mandatory: draft.mandatory };
-    void persist([...questions, question]); setDraft({ text:"", block:"Geral", type:"Texto aberto", options:["",""], eliminatory:false, city: draft.city, mandatory:false });
+    const question: Question = { id: `Q${Date.now()}`, block: draft.block, text: draft.text.trim(), type: draft.type, vars: [], options, suggestions: suggestions?.length ? suggestions : undefined, eliminatory: draft.eliminatory, city: draft.city.trim() || undefined, mandatory: draft.mandatory };
+    void persist([...questions, question]); setDraft({ text:"", block:"Geral", type:"Texto aberto", options:["",""], suggestions: [], eliminatory:false, city: draft.city, mandatory:false });
   };
   const saveEdit = () => {
     if (!editingQuestion) return;
@@ -1027,8 +1248,11 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
     const options = closedQuestionTypes.includes(editingQuestion.type)
       ? (editingQuestion.options || []).map((o) => o.trim()).filter(Boolean)
       : undefined;
+    const suggestions = editingQuestion.type === "Texto aberto"
+      ? (editingQuestion.suggestions || []).map((o) => o.trim()).filter(Boolean)
+      : undefined;
     if (closedQuestionTypes.includes(editingQuestion.type) && (!options || options.length < 2)) return act("Informe pelo menos duas opções");
-    void persist(questions.map((q) => (q.id === editingQuestion.id ? { ...editingQuestion, options } : q)));
+    void persist(questions.map((q) => (q.id === editingQuestion.id ? { ...editingQuestion, options, suggestions: suggestions?.length ? suggestions : undefined } : q)));
     setEditingQuestion(null);
   };
   const removeQuestion = (q: Question) => {
@@ -1130,6 +1354,33 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
             ))}
             <button className="secondary" onClick={() => setDraft({ ...draft, options: [...draft.options, ""] })}>
               <Plus /> Adicionar opção
+            </button>
+          </div>
+        )}
+        {draft.type === "Texto aberto" && (
+          <div className="optionRegister">
+            <b>Lista de sugestões (opcional)</b>
+            <p className="agentHint">
+              O agente digita e escolhe da lista (ou digita manualmente se não
+              encontrar) — ajuda a evitar erro de digitação. Deixe vazio para
+              manter o campo de texto livre normal.
+            </p>
+            {draft.suggestions.map((suggestion, index) => (
+              <div key={index}>
+                <input
+                  value={suggestion}
+                  onChange={(e) => {
+                    const suggestions = [...draft.suggestions];
+                    suggestions[index] = e.target.value;
+                    setDraft({ ...draft, suggestions });
+                  }}
+                  placeholder={`Sugestão ${index + 1}`}
+                />
+                <button onClick={() => setDraft({ ...draft, suggestions: draft.suggestions.filter((_, i) => i !== index) })}>×</button>
+              </div>
+            ))}
+            <button className="secondary" onClick={() => setDraft({ ...draft, suggestions: [...draft.suggestions, ""] })}>
+              <Plus /> Adicionar sugestão
             </button>
           </div>
         )}
@@ -1313,6 +1564,48 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
                       </button>
                     </div>
                   )}
+                  {editingQuestion.type === "Texto aberto" && (
+                    <div className="optionsEditor">
+                      <span>
+                        Lista de sugestões (opcional)
+                        <small>O agente escolhe da lista ou digita manualmente se não encontrar — reduz erro de digitação.</small>
+                      </span>
+                      {(editingQuestion.suggestions || []).map((suggestion, i) => (
+                        <div className="optionRow" key={i}>
+                          <input
+                            value={suggestion}
+                            onChange={(e) => {
+                              const suggestions = [...(editingQuestion.suggestions || [])];
+                              suggestions[i] = e.target.value;
+                              setEditingQuestion({ ...editingQuestion, suggestions });
+                            }}
+                            placeholder={`Sugestão ${i + 1}`}
+                          />
+                          <button
+                            onClick={() =>
+                              setEditingQuestion({
+                                ...editingQuestion,
+                                suggestions: (editingQuestion.suggestions || []).filter((_, x) => x !== i),
+                              })
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          setEditingQuestion({
+                            ...editingQuestion,
+                            suggestions: [...(editingQuestion.suggestions || []), ""],
+                          })
+                        }
+                      >
+                        <Plus /> Adicionar sugestão
+                      </button>
+                    </div>
+                  )}
                   <div className="questionEditActions">
                     <button className="secondary" onClick={() => setEditingQuestion(null)}>
                       Cancelar
@@ -1331,7 +1624,7 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
   );
 }
 
-function Researches({ act, adminToken }: { act: (x: string) => void; adminToken: string }) {
+function Researches({ act, adminToken, reportOnly }: { act: (x: string) => void; adminToken: string; reportOnly?: boolean }) {
   const [items, setItems] = useState<Research[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [cargos, setCargos] = useState<string[]>(() => {
@@ -1345,7 +1638,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   const [questionEdit, setQuestionEdit] = useState<Question | null>(null);
   const [draggedQuestion, setDraggedQuestion] = useState<string | null>(null);
   const [draggedResearch, setDraggedResearch] = useState<number | null>(null);
-  const [status, setStatus] = useState("Todas");
+  const [status, setStatus] = useState(() => (reportOnly ? "Finalizada" : "Todas"));
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Research | null>(null);
@@ -1358,7 +1651,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     | "relatorio"
   >("questionario");
   const [reportView, setReportView] = useState<
-    "planilha" | "graficos" | "resultado"
+    "planilha" | "graficos" | "resultado" | "comparar" | "revisar"
   >("planilha");
   const [reportSheet, setReportSheet] = useState<
     "cotas" | "agentes" | "questionario"
@@ -1382,9 +1675,45 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
   const [reportChartQuestionIds, setReportChartQuestionIds] = useState<
     string[]
   >([]);
-  const [reportChartDimension, setReportChartDimension] = useState<
-    "localidade" | "candidato"
-  >("localidade");
+  // Tipo e dimensão do gráfico são por pergunta — cada pergunta escolhida
+  // pode ter seu próprio estilo (uma em pizza, outra em barras verticais
+  // por localidade etc.), não um ajuste único pra todas de uma vez.
+  const [reportChartDimensionByQuestion, setReportChartDimensionByQuestion] = useState<
+    Record<string, "localidade" | "candidato">
+  >({});
+  const [reportChartTypeByQuestion, setReportChartTypeByQuestion] = useState<
+    Record<string, ChartType>
+  >({});
+  const chartDimensionFor = (questionId: string) =>
+    reportChartDimensionByQuestion[questionId] || "localidade";
+  const chartTypeFor = (questionId: string): ChartType =>
+    reportChartTypeByQuestion[questionId] || "barras-h";
+  // Filtro de localidades do "Resultado da pesquisa" — vazio = todas
+  // (comportamento de sempre). Escolhido pra poder imprimir só um recorte
+  // (ex.: só Bonito, ou só os bairros de Alto Bonito) sem mexer nos dados.
+  const [resultadoAreaFilter, setResultadoAreaFilter] = useState<string[]>([]);
+  // Nível de agrupamento usado no filtro de localidades, no Resultado da
+  // pesquisa e nos Gráficos "Por localidade" — "bairro" mostra cada bairro
+  // (Araticum, Bandinha...) na lista/tabela/gráfico; "localidade" agrupa
+  // pelas 5 macrorregiões (Bonito, Alto Bonito, Bentivi, Estreito do Norte,
+  // Zona Rural), tanto na marcação quanto no resultado. Mesmo nome usado
+  // pelo usuário pras duas granularidades — não confundir com o sentido
+  // antigo de "localidade" = bairro individual em `localityOptions`.
+  const [areaGroupLevel, setAreaGroupLevel] = useState<"bairro" | "localidade">(
+    "bairro",
+  );
+  const [openAnswerReviewOpen, setOpenAnswerReviewOpen] = useState<
+    Record<string, boolean>
+  >({});
+  type ComparisonRow = {
+    id: string;
+    researchId: number | null;
+    questionId: string | null;
+    seriesLabel: string;
+  };
+  const [comparisonRows, setComparisonRows] = useState<ComparisonRow[]>([
+    { id: "c1", researchId: null, questionId: null, seriesLabel: "" },
+  ]);
 
   const [printRequest, setPrintRequest] = useState<
     { view: "campo"; id: number } | null
@@ -1556,6 +1885,30 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
       save(items.map((item) => (item.id === editing.id ? updated : item)));
     }
     setEditing(updated);
+  };
+  // Corrigir a grafia (unificar variações da mesma resposta) ou marcar como
+  // "outras" (excluir da contagem) uma resposta de pergunta aberta. Diferente
+  // de updateEditing, salva sempre — não tem nada a ver com cota, então não
+  // faz sentido depender de distributionValid.
+  const saveOpenAnswerCorrection = (
+    questionId: string,
+    rawKey: string,
+    patch: Partial<OpenAnswerCorrection>,
+  ) => {
+    if (!editing) return;
+    const current = editing.openAnswerCorrections?.[questionId]?.[rawKey] || { label: "" };
+    const updated: Research = {
+      ...editing,
+      openAnswerCorrections: {
+        ...editing.openAnswerCorrections,
+        [questionId]: {
+          ...editing.openAnswerCorrections?.[questionId],
+          [rawKey]: { ...current, ...patch },
+        },
+      },
+    };
+    setEditing(updated);
+    save(items.map((item) => (item.id === editing.id ? updated : item)));
   };
   const closeEditing = () => {
     if (editing && !distributionValid(editing.target || 0, editing.quotas || {})) {
@@ -1887,10 +2240,13 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     const options = closedQuestionTypes.includes(questionEdit.type)
       ? (questionEdit.options || []).map((o) => o.trim()).filter(Boolean)
       : undefined;
+    const suggestions = questionEdit.type === "Texto aberto"
+      ? (questionEdit.suggestions || []).map((o) => o.trim()).filter(Boolean)
+      : undefined;
     saveQuestions(
       questions.map((question) =>
         question.id === questionEdit.id
-          ? { ...questionEdit, vars, options }
+          ? { ...questionEdit, vars, options, suggestions: suggestions?.length ? suggestions : undefined }
           : question,
       ),
     );
@@ -2025,46 +2381,206 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     setLetterhead(next);
     localStorage.setItem("pulso-letterhead", JSON.stringify(next));
   };
+  // Áreas visíveis no Resultado da pesquisa — todas por padrão, ou só as
+  // marcadas no filtro de localidade (ver resultadoAreaFilter, aba
+  // Resultado). Recalcula tanto as linhas quanto os totais, não só esconde.
+  const resultadoAreas = resultadoAreaFilter.length ? resultadoAreaFilter : editingQuotaAreas;
+  const resultadoInterviews = editing
+    ? (editing.interviews || []).filter(
+        (iv) =>
+          !resultadoAreaFilter.length ||
+          resultadoAreaFilter.some((area) => sameLocality(iv.locality, area)),
+      )
+    : [];
+  const isAreaChecked = (area: string) =>
+    !resultadoAreaFilter.length || resultadoAreaFilter.includes(area);
+  const toggleArea = (area: string) => {
+    const checked = isAreaChecked(area);
+    setResultadoAreaFilter((current) => {
+      const base = current.length ? current : editingQuotaAreas;
+      return checked ? base.filter((a) => a !== area) : [...base, area];
+    });
+  };
+  const setSectionAreas = (areasInSection: string[], checked: boolean) => {
+    setResultadoAreaFilter((current) => {
+      const base = current.length ? current : editingQuotaAreas;
+      const withoutSection = base.filter((a) => !areasInSection.includes(a));
+      return checked ? [...withoutSection, ...areasInSection] : withoutSection;
+    });
+  };
+  const resultadoAreasBySection = localitySections
+    .map((section) => ({
+      section,
+      areas: editingQuotaAreas.filter((area) => editingEntityMacro(area) === section),
+    }))
+    .filter((group) => group.areas.length);
+  // Painel "Filtrar localidades" — reusado tanto no Resultado da pesquisa
+  // quanto nos Gráficos por localidade, pra escolher um recorte em vez de
+  // sempre entrar tudo (uma pesquisa pode ter dezenas de localidades).
+  const localityFilterPanel = !!editingQuotaAreas.length && (
+    <div className="resultAreaFilter">
+      <div className="sectionTitle agentAreaTitle">
+        <div>
+          <h3>Filtrar localidades</h3>
+          <p>
+            Escolha quais localidades entram no resultado/gráfico abaixo e
+            na impressão — sem marcar nada, entram todas. Troque a
+            marcação e imprima de novo pra gerar outro recorte.
+          </p>
+        </div>
+        {!!resultadoAreaFilter.length && (
+          <button className="secondary" onClick={() => setResultadoAreaFilter([])}>
+            Todas as localidades
+          </button>
+        )}
+      </div>
+      <div className="filterPills reportDimensionPicker">
+        <button
+          className={areaGroupLevel === "bairro" ? "selected" : ""}
+          onClick={() => setAreaGroupLevel("bairro")}
+        >
+          Bairros
+        </button>
+        <button
+          className={areaGroupLevel === "localidade" ? "selected" : ""}
+          onClick={() => setAreaGroupLevel("localidade")}
+        >
+          Localidade
+        </button>
+      </div>
+      <p className="agentHint">
+        {areaGroupLevel === "bairro"
+          ? "Marcando por bairro, o resultado sai com o nome de cada bairro."
+          : "Marcando por localidade, o resultado sai só com o nome de Bonito, Alto Bonito, Bentivi, Estreito do Norte ou Zona Rural."}
+      </p>
+      {resultadoAreasBySection.map(({ section, areas }) =>
+        areaGroupLevel === "bairro" ? (
+          <div className="resultAreaSection" key={section}>
+            <div className="resultAreaSectionHead">
+              <b>{section}</b>
+              <span>
+                <button className="linkBtn" onClick={() => setSectionAreas(areas, true)}>
+                  Marcar todas
+                </button>
+                <button className="linkBtn" onClick={() => setSectionAreas(areas, false)}>
+                  Limpar
+                </button>
+              </span>
+            </div>
+            <div className="questionBank reportQuestionPicker">
+              {areas.map((area) => {
+                const picked = isAreaChecked(area);
+                return (
+                  <label key={area} className={picked ? "picked" : ""}>
+                    <input type="checkbox" checked={picked} onChange={() => toggleArea(area)} />
+                    <span>
+                      <b>{localityOptions.find((o) => o.key === area)?.label || area}</b>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ) : null,
+      )}
+      {areaGroupLevel === "localidade" && (
+        <div className="resultAreaSection">
+          <div className="questionBank reportQuestionPicker">
+            {resultadoAreasBySection.map(({ section, areas }) => {
+              const picked = areas.every((a) => isAreaChecked(a));
+              return (
+                <label key={section} className={picked ? "picked" : ""}>
+                  <input
+                    type="checkbox"
+                    checked={picked}
+                    onChange={() => setSectionAreas(areas, !picked)}
+                  />
+                  <span>
+                    <b>{section}</b>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+  // Linhas base (rótulo + entrevistas) pro nível de agrupamento escolhido —
+  // "bairro" = uma por localidade do filtro; "localidade" = uma por
+  // macrorregião (soma das localidades do filtro dentro dela). Alimenta a
+  // tabela do Resultado da pesquisa, os gráficos "Por localidade" e (pela
+  // mesma origem) o próprio filtro decide o que aparece marcável.
+  const areaRowGroups: { label: string; interviews: Interview[] }[] =
+    areaGroupLevel === "bairro"
+      ? resultadoAreas.map((area) => ({
+          label: localityOptions.find((o) => o.key === area)?.label || area,
+          interviews: resultadoInterviews.filter((iv) => sameLocality(iv.locality, area)),
+        }))
+      : Array.from(new Set(resultadoAreas.map(editingEntityMacro))).map((section) => {
+          const areasInSection = resultadoAreas.filter((a) => editingEntityMacro(a) === section);
+          return {
+            label: section,
+            interviews: resultadoInterviews.filter((iv) =>
+              areasInSection.some((a) => sameLocality(iv.locality, a)),
+            ),
+          };
+        });
+  const areaSeriesFor = (question: Question) =>
+    areaRowGroups
+      .map((group, i) => {
+        const row = computeQuestionRow(group.interviews, question);
+        return {
+          label: group.label,
+          color: chartPalette[i % chartPalette.length],
+          values: row.values,
+          total: row.total,
+        };
+      })
+      .filter((s) => s.total > 0);
   const reportResultadoQuestions = (() => {
     if (!editing) return [];
-    const interviews = editing.interviews || [];
     const closedQuestions = editing.questions
       .map((id) => questions.find((q) => q.id === id))
       .filter(
         (q): q is Question =>
           !!q &&
-          !q.eliminatory &&
           closedQuestionTypes.includes(q.type) &&
           !!(q.options || []).length,
       );
-    const computeRow = (rowInterviews: typeof interviews, q: Question) => {
-      const withAnswer = rowInterviews.filter(
-        (iv) => iv.answers[q.id] !== undefined,
-      );
-      const total = withAnswer.length;
-      const values = (q.options || []).map((option) => {
-        if (!total) return 0;
-        const count = withAnswer.filter((iv) => {
-          const answer = iv.answers[q.id];
-          return Array.isArray(answer)
-            ? answer.includes(option)
-            : answer === option;
-        }).length;
-        return Math.round((count / total) * 1000) / 10;
-      });
-      return { total, values };
-    };
     return closedQuestions.map((q) => ({
       question: q,
-      rows: editingQuotaAreas.map((area) => ({
-        area,
-        ...computeRow(
-          interviews.filter((iv) => sameLocality(iv.locality, area)),
-          q,
-        ),
+      rows: areaRowGroups.map((group) => ({
+        area: group.label,
+        ...computeQuestionRow(group.interviews, q),
       })),
-      totalRow: computeRow(interviews, q),
+      totalRow: computeQuestionRow(resultadoInterviews, q),
     }));
+  })();
+  // Perguntas abertas (Texto aberto, Número, Telefone, Endereço) ficavam de
+  // fora do relatório impresso — reportResultadoQuestions só monta tabela
+  // pra fechadas com opções, de propósito, pra não inventar percentual. Aqui
+  // elas ganham a mesma tabela cruzada localidade × resposta das fechadas,
+  // com as respostas de fato escritas virando as colunas (já passando pelas
+  // correções de grafia/exclusão de "Revisar respostas").
+  const reportOpenQuestions = (() => {
+    if (!editing) return [];
+    const openQuestions = editing.questions
+      .map((id) => questions.find((q) => q.id === id))
+      .filter(
+        (q): q is Question => !!q && !closedQuestionTypes.includes(q.type),
+      );
+    return openQuestions
+      .map((q) => ({
+        question: q,
+        ...computeOpenAnswerTable(
+          resultadoInterviews,
+          areaRowGroups,
+          q,
+          editing.openAnswerCorrections?.[q.id],
+        ),
+      }))
+      .filter((q) => q.labels.length > 0 || q.excludedCount > 0 || q.rawGroupList.length > 0);
   })();
   const questionEditPanel = questionEdit && (
     <div className="questionEditor">
@@ -2170,6 +2686,53 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
           </button>
         </div>
       )}
+      {questionEdit.type === "Texto aberto" && (
+        <div className="optionsEditor">
+          <span>
+            Lista de sugestões (opcional)
+            <small>
+              O agente escolhe da lista ou digita manualmente se não
+              encontrar — reduz erro de digitação.
+            </small>
+          </span>
+          {(questionEdit.suggestions || []).map((suggestion, i) => (
+            <div className="optionRow" key={i}>
+              <input
+                value={suggestion}
+                onChange={(e) => {
+                  const suggestions = [...(questionEdit.suggestions || [])];
+                  suggestions[i] = e.target.value;
+                  setQuestionEdit({ ...questionEdit, suggestions });
+                }}
+                placeholder={`Sugestão ${i + 1}`}
+              />
+              <button
+                onClick={() =>
+                  setQuestionEdit({
+                    ...questionEdit,
+                    suggestions: (questionEdit.suggestions || []).filter(
+                      (_, index) => index !== i,
+                    ),
+                  })
+                }
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            className="secondary"
+            onClick={() =>
+              setQuestionEdit({
+                ...questionEdit,
+                suggestions: [...(questionEdit.suggestions || []), ""],
+              })
+            }
+          >
+            <Plus /> Adicionar sugestão
+          </button>
+        </div>
+      )}
       <p>
         Você também pode usar os marcadores
         <code>&#123;&#123;candidato&#125;&#125;</code>,
@@ -2190,16 +2753,19 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
     <div className="content researches">
       <div className="researchHeader">
         <div>
-          <p className="eyebrow">GESTÃO DE COLETAS</p>
-          <h1>Pesquisas</h1>
+          <p className="eyebrow">{reportOnly ? "RELATÓRIOS" : "GESTÃO DE COLETAS"}</p>
+          <h1>{reportOnly ? "Relatórios" : "Pesquisas"}</h1>
           <p>
-            Consulte o histórico, acompanhe o status e monte novos
-            questionários.
+            {reportOnly
+              ? "Escolha uma pesquisa para gerar planilhas, gráficos ou o resultado consolidado."
+              : "Consulte o histórico, acompanhe o status e monte novos questionários."}
           </p>
         </div>
-        <button className="primary" onClick={openCreateResearch}>
-          <Plus /> Criar nova pesquisa
-        </button>
+        {!reportOnly && (
+          <button className="primary" onClick={openCreateResearch}>
+            <Plus /> Criar nova pesquisa
+          </button>
+        )}
       </div>
       <div className="researchSummary">
         <span>
@@ -2293,39 +2859,49 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                 <b>{x.questions.length}</b>
               </span>
               <div className="researchRowActions">
-                <button
-                  className="rowIconBtn"
-                  title="Duplicar pesquisa"
-                  onClick={() => duplicateResearch(x.id)}
-                >
-                  <Copy />
-                </button>
-                {x.status === "Ativa" && (
-                  <button
-                    className="rowIconBtn"
-                    title="Cancelar pesquisa"
-                    onClick={() => cancelResearch(x.id)}
-                  >
-                    <Ban />
-                  </button>
+                {!reportOnly && (
+                  <>
+                    <button
+                      className="rowIconBtn"
+                      title="Duplicar pesquisa"
+                      onClick={() => duplicateResearch(x.id)}
+                    >
+                      <Copy />
+                    </button>
+                    {x.status === "Ativa" && (
+                      <button
+                        className="rowIconBtn"
+                        title="Cancelar pesquisa"
+                        onClick={() => cancelResearch(x.id)}
+                      >
+                        <Ban />
+                      </button>
+                    )}
+                    <button
+                      className="rowIconBtn rowIconBtnDanger"
+                      title="Excluir pesquisa"
+                      onClick={() => deleteResearch(x.id)}
+                    >
+                      <Trash2 />
+                    </button>
+                  </>
                 )}
-                <button
-                  className="rowIconBtn rowIconBtnDanger"
-                  title="Excluir pesquisa"
-                  onClick={() => deleteResearch(x.id)}
-                >
-                  <Trash2 />
-                </button>
                 <button
                   className="secondary"
                   onClick={() => {
                     setEditing(x);
-                    setModalTab("questionario");
+                    setModalTab(reportOnly ? "relatorio" : "questionario");
                     setExpandedDistricts([]);
                     resetAgentDraft();
                   }}
                 >
-                  Gerenciar pesquisa
+                  {reportOnly ? (
+                    <>
+                      <BarChart3 /> Gerar relatório
+                    </>
+                  ) : (
+                    "Gerenciar pesquisa"
+                  )}
                 </button>
               </div>
             </article>
@@ -2710,7 +3286,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
       {editing && (
         <div className="modalShade" onMouseDown={closeEditing}>
           <div
-            className="questionView"
+            className={"questionView" + (modalTab === "relatorio" ? " questionViewWide" : "")}
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="modalHead">
@@ -2720,44 +3296,46 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
               </div>
               <button onClick={() => setEditing(null)}>×</button>
             </div>
-            <div className="modalTabs">
-              <button
-                className={modalTab === "config" ? "selected" : ""}
-                onClick={() => setModalTab("config")}
-              >
-                <Settings /> Configurações
-              </button>
-              <button
-                className={modalTab === "questionario" ? "selected" : ""}
-                onClick={() => setModalTab("questionario")}
-              >
-                <ClipboardList /> Questionário
-              </button>
-              <button
-                className={modalTab === "agentes" ? "selected" : ""}
-                onClick={() => setModalTab("agentes")}
-              >
-                <Users /> Lançar agente
-              </button>
-              <button
-                className={modalTab === "acessos" ? "selected" : ""}
-                onClick={() => setModalTab("acessos")}
-              >
-                <UserRoundCheck /> Acessos
-              </button>
-              <button
-                className={modalTab === "acompanhamento" ? "selected" : ""}
-                onClick={() => setModalTab("acompanhamento")}
-              >
-                <ChartNoAxesCombined /> Acompanhamento
-              </button>
-              <button
-                className={modalTab === "relatorio" ? "selected" : ""}
-                onClick={() => setModalTab("relatorio")}
-              >
-                <BarChart3 /> Relatório
-              </button>
-            </div>
+            {!reportOnly && (
+              <div className="modalTabs">
+                <button
+                  className={modalTab === "config" ? "selected" : ""}
+                  onClick={() => setModalTab("config")}
+                >
+                  <Settings /> Configurações
+                </button>
+                <button
+                  className={modalTab === "questionario" ? "selected" : ""}
+                  onClick={() => setModalTab("questionario")}
+                >
+                  <ClipboardList /> Questionário
+                </button>
+                <button
+                  className={modalTab === "agentes" ? "selected" : ""}
+                  onClick={() => setModalTab("agentes")}
+                >
+                  <Users /> Lançar agente
+                </button>
+                <button
+                  className={modalTab === "acessos" ? "selected" : ""}
+                  onClick={() => setModalTab("acessos")}
+                >
+                  <UserRoundCheck /> Acessos
+                </button>
+                <button
+                  className={modalTab === "acompanhamento" ? "selected" : ""}
+                  onClick={() => setModalTab("acompanhamento")}
+                >
+                  <ChartNoAxesCombined /> Acompanhamento
+                </button>
+                <button
+                  className={modalTab === "relatorio" ? "selected" : ""}
+                  onClick={() => setModalTab("relatorio")}
+                >
+                  <BarChart3 /> Relatório
+                </button>
+              </div>
+            )}
             {modalTab === "config" ? (
               <div className="modalBody">
                 <section className="formSection">
@@ -3594,8 +4172,20 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                   >
                     <FileText /> Resultado da pesquisa
                   </button>
+                  <button
+                    className={reportView === "comparar" ? "selected" : ""}
+                    onClick={() => setReportView("comparar")}
+                  >
+                    <ChartNoAxesCombined /> Comparar pesquisas
+                  </button>
+                  <button
+                    className={reportView === "revisar" ? "selected" : ""}
+                    onClick={() => setReportView("revisar")}
+                  >
+                    <Pencil /> Revisar respostas
+                  </button>
                 </div>
-                {reportView === "resultado" && (
+                {reportView !== "planilha" && reportView !== "revisar" && (
                   <style>{"@media print { @page { size: landscape; } }"}</style>
                 )}
                 {reportView === "planilha" ? (
@@ -3754,18 +4344,19 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                     </div>
                   </>
                 ) : reportView === "graficos" ? (
-                  <>
-                    {!!reportResultadoQuestions.length && (
-                      <>
-                        <div className="sectionTitle agentAreaTitle">
-                          <div>
-                            <h3>Resultado por pergunta em gráfico</h3>
-                            <p>
-                              Escolha as perguntas e como agrupar a
-                              comparação.
-                            </p>
-                          </div>
+                  <div className="graficosSplit">
+                    <div className="graficosSidebar">
+                      <div className="sectionTitle agentAreaTitle">
+                        <div>
+                          <h3>Perguntas</h3>
+                          <p>
+                            Escolha quais entram no gráfico — todas saem
+                            juntas no mesmo arquivo pra imprimir.
+                          </p>
                         </div>
+                      </div>
+                      {!!reportResultadoQuestions.length && (
+                        <>
                         <div className="questionBank reportQuestionPicker">
                           {reportResultadoQuestions.map(({ question }) => (
                             <label
@@ -3798,35 +4389,17 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                             </label>
                           ))}
                         </div>
-                        <div className="filterPills reportDimensionPicker">
-                          <button
-                            className={
-                              reportChartDimension === "localidade"
-                                ? "selected"
-                                : ""
-                            }
-                            onClick={() =>
-                              setReportChartDimension("localidade")
-                            }
-                          >
-                            Por localidade
-                          </button>
-                          <button
-                            className={
-                              reportChartDimension === "candidato"
-                                ? "selected"
-                                : ""
-                            }
-                            onClick={() =>
-                              setReportChartDimension("candidato")
-                            }
-                          >
-                            Por candidato / cargo
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  <div className="reportPrintArea">
+                        <p className="agentHint">
+                          Cada pergunta escolhida ganha seu próprio seletor
+                          de tipo na prévia ao lado — o agrupamento por
+                          localidade usa o filtro abaixo.
+                        </p>
+                        {localityFilterPanel}
+                        </>
+                      )}
+                    </div>
+                    <div className="graficosPreview">
+                    <div className="reportPrintArea">
                     <div className="reportPrintHead">
                       <b>
                         {editing.number} — {editing.title}
@@ -3916,117 +4489,147 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                         )}
                       </article>
                     </div>
-                    {!!reportChartQuestionIds.length && (
-                      <div className="reportChartGrid reportQuestionCharts">
-                        {reportResultadoQuestions
-                          .filter(({ question }) =>
-                            reportChartQuestionIds.includes(question.id),
-                          )
-                          .map(({ question, rows, totalRow }) => (
-                            <article
-                              className="reportChartCard reportChartWide"
-                              key={question.id}
-                            >
-                              <h4>
-                                {resolveQuestion(
-                                  question.text,
-                                  editing.variables?.[question.id],
-                                )}
-                              </h4>
-                              {reportChartDimension === "candidato" ? (
+                    {!reportChartQuestionIds.length && (
+                      <p className="agentHint">
+                        Marque uma ou mais perguntas na lista ao lado pra
+                        ver a prévia do gráfico aqui.
+                      </p>
+                    )}
+                    {!!reportChartQuestionIds.length &&
+                      reportResultadoQuestions
+                        .filter(({ question }) =>
+                          reportChartQuestionIds.includes(question.id),
+                        )
+                        .map(({ question, rows, totalRow }, index) => (
+                          <div className="resultItem reportChartPage" key={question.id}>
+                            <div className="resultLetterheadSmall">
+                              <div className="resultLogoBox">
+                                {letterhead.name ? letterhead.name.slice(0, 1) : "P"}
+                              </div>
+                              <div>
+                                <span>{letterhead.name || "Instituto de pesquisa"}</span>
+                                {letterhead.cnpj && <small>CNPJ {letterhead.cnpj}</small>}
+                              </div>
+                            </div>
+                            <p className="reportChartPageMeta">
+                              PESQUISA DE OPINIÃO PÚBLICA
+                              <br />
+                              LOCAL: {editing.city || "—"}
+                              <br />
+                              ÉPOCA: {formatDateBR(editing.start)} a{" "}
+                              {formatDateBR(editing.end)}
+                            </p>
+                            <p className="resultItemHead">
+                              <b>Item {index + 1} -</b>{" "}
+                              {resolveQuestion(
+                                question.text,
+                                editing.variables?.[question.id],
+                              )}
+                            </p>
+                            <div className="filterPills reportDimensionPicker chartPagePickers">
+                              <button
+                                className={chartDimensionFor(question.id) === "localidade" ? "selected" : ""}
+                                onClick={() =>
+                                  setReportChartDimensionByQuestion((current) => ({
+                                    ...current,
+                                    [question.id]: "localidade",
+                                  }))
+                                }
+                              >
+                                Por localidade
+                              </button>
+                              <button
+                                className={chartDimensionFor(question.id) === "candidato" ? "selected" : ""}
+                                onClick={() =>
+                                  setReportChartDimensionByQuestion((current) => ({
+                                    ...current,
+                                    [question.id]: "candidato",
+                                  }))
+                                }
+                              >
+                                Por candidato / cargo
+                              </button>
+                            </div>
+                            <div className="filterPills reportDimensionPicker chartPagePickers">
+                              {(
+                                [
+                                  ["barras-h", "Barras horizontais"],
+                                  ["barras-v", "Barras verticais"],
+                                  ["pizza", "Pizza"],
+                                  ["rosca", "Rosca"],
+                                ] as [ChartType, string][]
+                              ).map(([type, label]) => (
+                                <button
+                                  key={type}
+                                  className={chartTypeFor(question.id) === type ? "selected" : ""}
+                                  onClick={() =>
+                                    setReportChartTypeByQuestion((current) => ({
+                                      ...current,
+                                      [question.id]: type,
+                                    }))
+                                  }
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="reportChartPageBody">
+                              {chartDimensionFor(question.id) === "candidato" ? (
                                 totalRow.total ? (
-                                  <div className="reportBarList">
-                                    {question.options!.map((option, i) => {
-                                      const max = Math.max(
-                                        ...totalRow.values,
-                                        1,
-                                      );
-                                      return (
-                                        <div
-                                          className="reportBarRow"
-                                          key={option}
-                                        >
-                                          <span>{option}</span>
-                                          <div className="reportBarTrack">
-                                            <i
-                                              style={{
-                                                width: `${(totalRow.values[i] / max) * 100}%`,
-                                              }}
-                                            />
-                                          </div>
-                                          <b>
-                                            {totalRow.values[i]
-                                              .toFixed(1)
-                                              .replace(".", ",")}
-                                            %
-                                          </b>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
+                                  <article className="reportChartCard reportChartWide">
+                                    {renderChart(
+                                      chartTypeFor(question.id),
+                                      question.options!.map((option, i) => ({
+                                        label: option,
+                                        value: totalRow.values[i],
+                                      })),
+                                    )}
+                                  </article>
                                 ) : (
                                   <p className="agentHint">
                                     Nenhuma entrevista registrada para esta
                                     pergunta.
                                   </p>
                                 )
-                              ) : rows.some((row) => row.total) ? (
-                                <div className="reportLocalityCharts">
-                                  {rows
-                                    .filter((row) => row.total)
-                                    .map((row) => {
-                                      const max = Math.max(
-                                        ...row.values,
-                                        1,
-                                      );
-                                      return (
-                                        <div
-                                          className="reportLocalityChartGroup"
-                                          key={row.area}
-                                        >
-                                          <b>{row.area}</b>
-                                          <div className="reportBarList">
-                                            {question.options!.map(
-                                              (option, i) => (
-                                                <div
-                                                  className="reportBarRow"
-                                                  key={option}
-                                                >
-                                                  <span>{option}</span>
-                                                  <div className="reportBarTrack">
-                                                    <i
-                                                      style={{
-                                                        width: `${(row.values[i] / max) * 100}%`,
-                                                      }}
-                                                    />
-                                                  </div>
-                                                  <b>
-                                                    {row.values[i]
-                                                      .toFixed(1)
-                                                      .replace(".", ",")}
-                                                    %
-                                                  </b>
-                                                </div>
-                                              ),
-                                            )}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                </div>
                               ) : (
-                                <p className="agentHint">
-                                  Nenhuma entrevista registrada para esta
-                                  pergunta.
-                                </p>
+                                (() => {
+                                  const series = areaSeriesFor(question);
+                                  return series.length ? (
+                                    <article className="reportChartCard reportChartWide">
+                                      <ChartGroupedBars
+                                        categories={question.options || []}
+                                        series={series}
+                                      />
+                                    </article>
+                                  ) : (
+                                    <p className="agentHint">
+                                      Nenhuma entrevista registrada para esta
+                                      pergunta nas localidades escolhidas.
+                                    </p>
+                                  );
+                                })()
                               )}
-                            </article>
-                          ))}
-                      </div>
-                    )}
+                            </div>
+                            {(letterhead.address ||
+                              letterhead.phones ||
+                              letterhead.email) && (
+                              <div className="resultFooter">
+                                {letterhead.address && <span>{letterhead.address}</span>}
+                                {(letterhead.phones || letterhead.email) && (
+                                  <span>
+                                    {letterhead.phones}
+                                    {letterhead.phones && letterhead.email ? " · " : ""}
+                                    {letterhead.email}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                    </div>
                   </div>
-                  </>
-                ) : (
+                ) : reportView === "resultado" ? (
                   <>
                     <div className="letterheadEditor">
                       <div className="sectionTitle">
@@ -4106,6 +4709,7 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                         />
                       </label>
                     </div>
+                    {localityFilterPanel}
                     {createPortal(
                     <div className="reportPrintArea resultLandscape">
                       <div className="resultCover">
@@ -4231,8 +4835,372 @@ function Researches({ act, adminToken }: { act: (x: string) => void; adminToken:
                           ),
                         )
                       )}
+                      {reportOpenQuestions.map(
+                        ({ question, labels, rows, totalRow, excludedCount }, index) => (
+                          <div className="resultItem" key={question.id}>
+                            <div className="resultLetterheadSmall">
+                              <div className="resultLogoBox">
+                                {letterhead.name
+                                  ? letterhead.name.slice(0, 1)
+                                  : "P"}
+                              </div>
+                              <span>
+                                {letterhead.name || "Instituto de pesquisa"}
+                              </span>
+                            </div>
+                            <p className="resultItemHead">
+                              <b>
+                                Item {reportResultadoQuestions.length + index + 1} -
+                              </b>{" "}
+                              {resolveQuestion(
+                                question.text,
+                                editing.variables?.[question.id],
+                              )}
+                              <small> (resposta aberta)</small>
+                            </p>
+                            {labels.length ? (
+                              <table className="reportTable resultTable">
+                                <thead>
+                                  <tr>
+                                    <th />
+                                    {labels.map((label) => (
+                                      <th key={label}>{label}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rows.map((row) => (
+                                    <tr key={row.area}>
+                                      <td>{row.area}</td>
+                                      {row.values.map((value, i) => (
+                                        <td key={i}>
+                                          {row.total
+                                            ? value.toFixed(1).replace(".", ",")
+                                            : "—"}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                  <tr className="resultTotalRow">
+                                    <td />
+                                    {totalRow.values.map((value, i) => (
+                                      <td key={i}>
+                                        {totalRow.total
+                                          ? value.toFixed(1).replace(".", ",")
+                                          : "—"}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                </tbody>
+                              </table>
+                            ) : (
+                              <p className="agentHint">
+                                Todas as respostas coletadas foram marcadas
+                                como "outras" nesta pergunta.
+                              </p>
+                            )}
+                            {!!excludedCount && (
+                              <p className="resultExcludedNote">
+                                {excludedCount} resposta{excludedCount > 1 ? "s" : ""} marcada
+                                {excludedCount > 1 ? "s" : ""} como "outras" — não conta
+                                {excludedCount > 1 ? "m" : ""} no total acima.
+                              </p>
+                            )}
+                          </div>
+                        ),
+                      )}
                     </div>,
                     document.body,
+                    )}
+                  </>
+                ) : reportView === "comparar" ? (
+                  <div className="graficosSplit">
+                    <div className="graficosSidebar">
+                    <p className="agentHint">
+                      Escolha uma pesquisa e uma pergunta em cada linha — o
+                      resultado sai ordenado por data, pra comparar a
+                      evolução. Linhas com a mesma pergunta (ou perguntas
+                      diferentes com as mesmas opções de resposta) viram um
+                      gráfico só; dê um rótulo pra cada linha (ex.: "Sem
+                      apoio"/"Com apoio") se não quiser usar o padrão
+                      (mês/ano da pesquisa).
+                    </p>
+                    {comparisonRows.map((row) => {
+                      const research = items.find((r) => r.id === row.researchId);
+                      const rowQuestions = research
+                        ? (research.questions
+                            .map((id) => questions.find((q) => q.id === id))
+                            .filter(
+                              (q): q is Question =>
+                                !!q &&
+                                ((closedQuestionTypes.includes(q.type) && !!(q.options || []).length) ||
+                                  q.type === "Texto aberto"),
+                            ) as Question[])
+                        : [];
+                      return (
+                        <div className="comparisonRow" key={row.id}>
+                          <select
+                            value={row.researchId ?? ""}
+                            onChange={(e) => {
+                              const researchId = e.target.value ? Number(e.target.value) : null;
+                              setComparisonRows((current) =>
+                                current.map((r) =>
+                                  r.id === row.id
+                                    ? { ...r, researchId, questionId: null }
+                                    : r,
+                                ),
+                              );
+                            }}
+                          >
+                            <option value="">Escolha a pesquisa...</option>
+                            {[...items]
+                              .sort((a, b) => a.start.localeCompare(b.start))
+                              .map((r) => (
+                                <option key={r.id} value={r.id}>
+                                  {r.number} — {r.title} ({formatDateBR(r.start)})
+                                </option>
+                              ))}
+                          </select>
+                          <select
+                            value={row.questionId ?? ""}
+                            disabled={!research}
+                            onChange={(e) => {
+                              const questionId = e.target.value || null;
+                              setComparisonRows((current) =>
+                                current.map((r) => (r.id === row.id ? { ...r, questionId } : r)),
+                              );
+                            }}
+                          >
+                            <option value="">Escolha a pergunta...</option>
+                            {rowQuestions.map((q) => (
+                              <option key={q.id} value={q.id}>
+                                {q.text}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={row.seriesLabel}
+                            onChange={(e) =>
+                              setComparisonRows((current) =>
+                                current.map((r) =>
+                                  r.id === row.id ? { ...r, seriesLabel: e.target.value } : r,
+                                ),
+                              )
+                            }
+                            placeholder="Rótulo da série (opcional)"
+                          />
+                          {comparisonRows.length > 1 && (
+                            <button
+                              className="rowIconBtn rowIconBtnDanger"
+                              onClick={() =>
+                                setComparisonRows((current) => current.filter((r) => r.id !== row.id))
+                              }
+                            >
+                              <Trash2 />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        setComparisonRows((current) => [
+                          ...current,
+                          { id: `c${Date.now()}`, researchId: null, questionId: null, seriesLabel: "" },
+                        ])
+                      }
+                    >
+                      <Plus /> Adicionar pesquisa
+                    </button>
+                    </div>
+                    <div className="graficosPreview">
+                    {(() => {
+                      const completeRows = comparisonRows
+                        .map((row) => {
+                          const research = items.find((r) => r.id === row.researchId);
+                          const question = row.questionId
+                            ? questions.find((q) => q.id === row.questionId)
+                            : undefined;
+                          if (!research || !question) return null;
+                          // Fecha com opções vira categoria pelas próprias opções;
+                          // aberta usa as respostas corrigidas em "Revisar
+                          // respostas" dessa pesquisa como categorias.
+                          const isClosed =
+                            closedQuestionTypes.includes(question.type) &&
+                            !!(question.options || []).length;
+                          const values: Record<string, number> = {};
+                          let categories: string[];
+                          let hasData: boolean;
+                          if (isClosed) {
+                            const computed = computeQuestionRow(research.interviews || [], question);
+                            categories = question.options || [];
+                            categories.forEach((cat, i) => (values[cat] = computed.values[i]));
+                            hasData = computed.total > 0;
+                          } else {
+                            const computed = computeOpenAnswerTable(
+                              research.interviews || [],
+                              [],
+                              question,
+                              research.openAnswerCorrections?.[question.id],
+                            );
+                            categories = computed.labels;
+                            categories.forEach(
+                              (cat, i) => (values[cat] = computed.totalRow.values[i]),
+                            );
+                            hasData = computed.totalRow.total > 0;
+                          }
+                          return { row, research, question, categories, values, hasData };
+                        })
+                        .filter((r): r is NonNullable<typeof r> => !!r)
+                        .sort((a, b) => a.research.start.localeCompare(b.research.start));
+                      if (!completeRows.length) {
+                        return (
+                          <p className="agentHint">
+                            Escolha ao menos uma pesquisa e uma pergunta pra comparar.
+                          </p>
+                        );
+                      }
+                      // Mesma pergunta em pesquisas (rodadas) diferentes vira UM
+                      // gráfico só — dá pra ver a evolução lado a lado. Perguntas
+                      // DIFERENTES com o mesmo conjunto de respostas (ex.: mesma
+                      // lista de candidatos com/sem uma informação extra) também
+                      // se juntam automaticamente no mesmo gráfico.
+                      const categoryKey = (cats: string[]) => [...cats].sort().join("␟");
+                      type Group = { rows: typeof completeRows };
+                      const groups: Group[] = [];
+                      for (const entry of completeRows) {
+                        const group =
+                          groups.find((g) => g.rows.some((x) => x.question.id === entry.question.id)) ||
+                          groups.find((g) => categoryKey(g.rows[0].categories) === categoryKey(entry.categories));
+                        if (group) group.rows.push(entry);
+                        else groups.push({ rows: [entry] });
+                      }
+                      return createPortal(
+                        <div className="reportPrintArea">
+                          <div className="reportPrintHead">
+                            <b>Comparação entre pesquisas</b>
+                            <span>Ao longo do tempo</span>
+                          </div>
+                          <div className="reportChartGrid">
+                            {groups.map((group, gi) => {
+                              const categories = Array.from(
+                                new Set(group.rows.flatMap((r) => r.categories)),
+                              );
+                              const series = group.rows.map((entry, i) => ({
+                                label:
+                                  entry.row.seriesLabel.trim() ||
+                                  `${roundLabel(entry.research.start)} (${entry.research.number})`,
+                                color: chartPalette[i % chartPalette.length],
+                                values: categories.map((cat) => entry.values[cat] || 0),
+                              }));
+                              const hasData = group.rows.some((r) => r.hasData);
+                              return (
+                                <article
+                                  className="reportChartCard reportChartWide"
+                                  key={group.rows.map((r) => r.row.id).join("-") || gi}
+                                >
+                                  <h4>{group.rows[0].question.text}</h4>
+                                  {hasData ? (
+                                    <ChartGroupedBars categories={categories} series={series} />
+                                  ) : (
+                                    <p className="agentHint">
+                                      Nenhuma entrevista registrada para esta pergunta nas
+                                      pesquisas escolhidas.
+                                    </p>
+                                  )}
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </div>,
+                        document.body,
+                      );
+                    })()}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {localityFilterPanel}
+                    {reportOpenQuestions.length ? (
+                      <div className="openAnswerReview openAnswerReviewFull">
+                        <div className="sectionTitle agentAreaTitle">
+                          <div>
+                            <h3>Revisar respostas abertas</h3>
+                            <p>
+                              Corrija a grafia pra unificar variações da
+                              mesma resposta (ex.: "agua" e "água" viram uma
+                              linha só) ou marque como "outras" pra excluir
+                              da contagem. Isso não aparece na impressão.
+                            </p>
+                          </div>
+                        </div>
+                        {reportOpenQuestions.map(({ question, rawGroupList }) => (
+                          <div className="openAnswerReviewQuestion" key={question.id}>
+                            <button
+                              type="button"
+                              className="linkBtn"
+                              onClick={() =>
+                                setOpenAnswerReviewOpen((current) => ({
+                                  ...current,
+                                  [question.id]: !current[question.id],
+                                }))
+                              }
+                            >
+                              {openAnswerReviewOpen[question.id] ? "▾" : "▸"}{" "}
+                              {question.text} ({rawGroupList.length} resposta
+                              {rawGroupList.length > 1 ? "s" : ""} distinta
+                              {rawGroupList.length > 1 ? "s" : ""})
+                            </button>
+                            {openAnswerReviewOpen[question.id] && (
+                              <div className="openAnswerReviewRows">
+                                {rawGroupList.map((group) => {
+                                  const correction =
+                                    editing.openAnswerCorrections?.[question.id]?.[group.key];
+                                  return (
+                                    <div className="openAnswerReviewRow" key={group.key}>
+                                      <span className="openAnswerReviewRaw">
+                                        {group.label}
+                                        <small>{group.count}×</small>
+                                      </span>
+                                      <input
+                                        defaultValue={correction?.label || group.label}
+                                        placeholder="Grafia correta..."
+                                        disabled={!!correction?.excluded}
+                                        onBlur={(e) => {
+                                          const label = e.target.value.trim();
+                                          if (label && label !== group.label) {
+                                            saveOpenAnswerCorrection(question.id, group.key, { label });
+                                          } else if (!label) {
+                                            saveOpenAnswerCorrection(question.id, group.key, { label: "" });
+                                          }
+                                        }}
+                                      />
+                                      <label className="checkLabel">
+                                        <input
+                                          type="checkbox"
+                                          checked={!!correction?.excluded}
+                                          onChange={(e) =>
+                                            saveOpenAnswerCorrection(question.id, group.key, {
+                                              excluded: e.target.checked,
+                                            })
+                                          }
+                                        />
+                                        Marcar como outras
+                                      </label>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="agentHint">
+                        Nenhuma pergunta de texto aberto com respostas
+                        registradas nesta pesquisa ainda.
+                      </p>
                     )}
                   </>
                 )}
@@ -4473,6 +5441,59 @@ function AddressField({
   );
 }
 
+// Campo de resposta aberta com lista de sugestões (mesmo padrão do
+// AddressField acima) — o agente digita e filtra a lista, ou simplesmente
+// digita algo que não está na lista: continua sendo texto livre, a lista só
+// existe pra reduzir erro de digitação em respostas recorrentes (problema da
+// localidade, nome de candidato etc.).
+function SuggestionField({
+  value,
+  onChange,
+  suggestions,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  suggestions: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const matches = value.trim().length
+    ? suggestions.filter((s) => s.toLowerCase().includes(value.trim().toLowerCase())).slice(0, 8)
+    : suggestions.slice(0, 8);
+  return (
+    <div className="addressField">
+      <div className="addressAutocomplete">
+        <input
+          className="agentAnswerInput"
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          placeholder="Digite ou escolha uma sugestão..."
+        />
+        {open && !!matches.length && (
+          <div className="addressSuggestions">
+            {matches.map((name) => (
+              <button
+                key={name}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange(name);
+                  setOpen(false);
+                }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AgentApp({
   back,
   online,
@@ -4482,13 +5503,50 @@ function AgentApp({
   online: boolean;
   act: (x: string) => void;
 }) {
-  const [researches, setResearches] = useState<Research[]>([]);
-  const [bank, setBank] = useState<Question[]>([]);
+  // Sessão, pesquisa e banco de perguntas do agente ficam também em
+  // localStorage (chaves próprias, não as usadas pelo painel admin) para que
+  // o app continue funcionando depois de fechar/reabrir sem internet — antes
+  // esses três estados só viviam em memória e sumiam a cada reload, mesmo com
+  // a fila de entrevistas pendentes intacta.
+  const [researches, setResearches] = useState<Research[]>(() => {
+    try {
+      const raw = localStorage.getItem("pulso-agent-cache-research");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [bank, setBank] = useState<Question[]>(() => {
+    try {
+      const raw = localStorage.getItem("pulso-agent-cache-bank");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
   const [session, setSession] = useState<{
     researchId: number;
     agentId: string;
-  } | null>(null);
-  const [loginForm, setLoginForm] = useState({ login: "", password: "" });
+  } | null>(() => {
+    try {
+      const raw = localStorage.getItem("pulso-agent-session");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  // A senha fica guardada junto (diferente de antes) só assim é possível
+  // reenviar entrevistas pendentes depois de um reload sem sinal — sem ela a
+  // RPC de envio não autentica o agente. É o mesmo código de acesso gerado na
+  // aba "Acessos" da pesquisa, não uma senha pessoal do agente.
+  const [loginForm, setLoginForm] = useState(() => {
+    try {
+      const raw = localStorage.getItem("pulso-agent-credentials");
+      return raw ? JSON.parse(raw) : { login: "", password: "" };
+    } catch {
+      return { login: "", password: "" };
+    }
+  });
   const [toast, setToast] = useState("");
   const notify = (m: string) => {
     setToast(m);
@@ -4560,23 +5618,35 @@ function AgentApp({
 
   const persistResearches = (next: Research[]) => {
     setResearches(next);
-    localStorage.setItem("pulso-research", JSON.stringify(next));
+    localStorage.setItem("pulso-agent-cache-research", JSON.stringify(next));
   };
   const login = async () => {
-    const { data, error } = await supabase.rpc("pulso_agent_login", { p_login: loginForm.login.trim(), p_password: loginForm.password });
+    const login = loginForm.login.trim();
+    const { data, error } = await supabase.rpc("pulso_agent_login", { p_login: login, p_password: loginForm.password });
     if (!error && data?.research) {
-      setResearches([data.research]); setBank(data.questions || []);
+      const nextResearches = [data.research];
+      const nextBank = data.questions || [];
+      setResearches(nextResearches); setBank(nextBank);
+      localStorage.setItem("pulso-agent-cache-research", JSON.stringify(nextResearches));
+      localStorage.setItem("pulso-agent-cache-bank", JSON.stringify(nextBank));
       const next = { researchId: data.research.id, agentId: data.agent.id };
       setSession(next); localStorage.setItem("pulso-agent-session", JSON.stringify(next));
+      localStorage.setItem("pulso-agent-credentials", JSON.stringify({ login, password: loginForm.password }));
       notify(`Bem-vindo(a), ${data.agent.name.split(" ")[0]}`);
-      flushPendingInterviews(loginForm.login.trim(), loginForm.password, data.research.id, data.agent.id);
+      flushPendingInterviews(login, loginForm.password, data.research.id, data.agent.id);
       return;
     }
     notify("Login ou senha inválidos");
   };
   const logout = () => {
     setSession(null);
+    setResearches([]);
+    setBank([]);
+    setLoginForm({ login: "", password: "" });
     localStorage.removeItem("pulso-agent-session");
+    localStorage.removeItem("pulso-agent-cache-research");
+    localStorage.removeItem("pulso-agent-cache-bank");
+    localStorage.removeItem("pulso-agent-credentials");
     setLocality("");
     setStepIndex(0);
     setAnswers({});
@@ -4693,6 +5763,15 @@ function AgentApp({
     notify("Entrevista salva");
   };
 
+  const pendingCount = pendingInterviews.filter(
+    (p) => p.researchId === session?.researchId && p.agentId === session?.agentId,
+  ).length;
+  const syncNow = () => {
+    if (!session || !loginForm.password) return;
+    if (!online) return notify("Sem internet no momento — tentaremos de novo quando voltar o sinal");
+    flushPendingInterviews(loginForm.login.trim(), loginForm.password, session.researchId, session.agentId);
+  };
+
   return (
     <div className="agentApp">
       {toast && (
@@ -4709,10 +5788,23 @@ function AgentApp({
             <small>{research ? research.number : "Sem sessão ativa"}</small>
           </span>
         </div>
-        <span className={"connection " + (online ? "" : "off")}>
-          {online ? <Wifi /> : <WifiOff />}
-          {online ? "Online" : "Offline"}
-        </span>
+        <div className="agentHeaderStatus">
+          {!!pendingCount && (
+            <button
+              type="button"
+              className="pendingSyncBadge"
+              onClick={syncNow}
+              title="Tentar enviar agora"
+            >
+              <RefreshCw />
+              {pendingCount} pendente{pendingCount > 1 ? "s" : ""}
+            </button>
+          )}
+          <span className={"connection " + (online ? "" : "off")}>
+            {online ? <Wifi /> : <WifiOff />}
+            {online ? "Online" : "Offline"}
+          </span>
+        </div>
       </header>
       <main>
         <button className="back" onClick={session ? logout : back}>
@@ -4978,6 +6070,13 @@ function AgentApp({
                   key={currentQuestion.id}
                   value={(answers[currentQuestion.id] as string) || ""}
                   onChange={setAnswer}
+                />
+              ) : currentQuestion.suggestions?.length ? (
+                <SuggestionField
+                  key={currentQuestion.id}
+                  value={(answers[currentQuestion.id] as string) || ""}
+                  onChange={setAnswer}
+                  suggestions={currentQuestion.suggestions}
                 />
               ) : (
                 <textarea

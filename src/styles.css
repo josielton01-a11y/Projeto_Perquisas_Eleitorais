@@ -504,6 +504,28 @@ nav button.active:before {
   width: 14px;
   height: 14px;
 }
+.agentHeaderStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pendingSyncBadge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #92623f;
+  background: #fff2e8;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 9px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  cursor: pointer;
+}
+.pendingSyncBadge svg {
+  width: 14px;
+  height: 14px;
+}
 .map {
   height: 277px;
   position: relative;
@@ -1871,6 +1893,9 @@ textarea.agentAnswerInput {
   flex-direction: column;
   box-shadow: 0 24px 70px #0006;
 }
+.questionViewWide {
+  width: min(1400px, 96vw);
+}
 .modalHead {
   background: #1b1d22;
   color: #fff;
@@ -2838,6 +2863,193 @@ textarea.agentAnswerInput {
   text-align: right;
   font-size: 10px;
 }
+.chartBarsVertical {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  height: 180px;
+  padding-top: 8px;
+}
+.chartBarVCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1;
+  height: 100%;
+  gap: 4px;
+  min-width: 0;
+}
+.chartBarVCol b {
+  font-size: 10px;
+}
+.chartBarVTrack {
+  width: 22px;
+  flex: 1;
+  background: #eee;
+  border-radius: 20px;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+.chartBarVTrack > i {
+  display: block;
+  width: 100%;
+  background: #c79a35;
+  border-radius: 20px;
+}
+.chartBarVCol span {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  text-align: center;
+  color: #3a3d43;
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chartPieWrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.chartPie {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.chartPieHole {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: #fff;
+}
+.chartPieLegend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 10px;
+}
+.chartPieLegend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #232529;
+  color: #fff;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 5px;
+  width: fit-content;
+}
+.chartPieLegend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.groupedBarChart {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.groupedBarPlot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  gap: 24px;
+  height: 220px;
+  border-bottom: 1px solid #e2e4e7;
+  padding: 0 8px;
+}
+.groupedBarCluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+}
+.groupedBarBars {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex: 1;
+  width: 100%;
+  justify-content: center;
+}
+.groupedBarCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 4px;
+}
+.groupedBarCol b {
+  font-size: 11px;
+}
+.groupedBarTrack {
+  width: 34px;
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+}
+.groupedBarCluster > span {
+  margin-top: 8px;
+  font-size: 11px;
+  text-align: center;
+  color: #3a3d43;
+}
+.groupedBarLegend {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  font-size: 11px;
+}
+.groupedBarLegend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.groupedBarLegend i {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
+.graficosSplit {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+.graficosSidebar {
+  width: 320px;
+  flex: none;
+  position: sticky;
+  top: 0;
+  max-height: 82vh;
+  overflow-y: auto;
+  padding-right: 4px;
+  background: transparent;
+  color: #1b1d22;
+}
+.graficosPreview {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .graficosSplit {
+    flex-direction: column;
+  }
+  .graficosSidebar {
+    width: 100%;
+    position: static;
+    max-height: none;
+  }
+}
 @media (max-width: 700px) {
   .reportChartGrid {
     grid-template-columns: 1fr;
@@ -2952,6 +3164,17 @@ textarea.agentAnswerInput {
     page-break-after: auto;
     break-after: auto;
   }
+  .reportChartPage {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    border: 0;
+    padding: 0;
+    background: none;
+  }
+  .reportChartPage .resultFooter {
+    margin-top: auto;
+  }
 }
 .letterheadEditor {
   background: #fff;
@@ -3028,6 +3251,54 @@ textarea.agentAnswerInput {
   font-size: 12px;
   margin: 3px 0;
 }
+/* Na tela, a página de gráfico é só mais um card largo do painel — o
+   timbre/rodapé e o visual de folha só aparecem na impressão (ver as
+   regras dentro de @media print mais abaixo). */
+.reportChartPage {
+  background: #fff;
+  border: 1px solid #e2e4e7;
+  border-radius: 11px;
+  padding: 16px;
+}
+.reportChartPage .resultLetterheadSmall,
+.reportChartPage .reportChartPageMeta,
+.reportChartPage .resultFooter {
+  display: none;
+}
+.reportChartPageMeta {
+  font-size: 10px;
+  color: #555;
+  margin: 10px 0 4px;
+  line-height: 1.5;
+}
+.reportChartPageBody {
+  padding: 8px 0;
+}
+.reportChartPageBody .reportChartCard {
+  width: 100%;
+  border: 0;
+  padding: 0;
+}
+@media print {
+  .reportChartPage .resultLetterheadSmall,
+  .reportChartPage .reportChartPageMeta,
+  .reportChartPage .resultFooter {
+    display: flex;
+  }
+  .reportChartPageMeta {
+    display: block !important;
+  }
+  .reportChartPageBody {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 0;
+  }
+  .chartPagePickers {
+    display: none;
+  }
+}
 .resultFooter {
   display: flex;
   flex-direction: column;
@@ -3045,6 +3316,68 @@ textarea.agentAnswerInput {
 .resultItemHead {
   font-size: 12px;
   margin: 0 0 10px;
+}
+.resultExcludedNote {
+  font-size: 10px;
+  font-style: italic;
+  color: #6b6f76;
+  margin: 6px 0 0;
+}
+.resultAreaFilter,
+.openAnswerReview {
+  margin-top: 16px;
+  background: #fff;
+  border: 1px solid #e2e4e7;
+  border-radius: 11px;
+  padding: 16px;
+}
+.resultAreaSection {
+  margin-top: 12px;
+}
+.resultAreaSectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.resultAreaSectionHead span {
+  display: flex;
+  gap: 12px;
+}
+.openAnswerReviewQuestion {
+  margin-top: 10px;
+}
+.openAnswerReviewQuestion > button {
+  font-size: 13px;
+}
+.openAnswerReviewRows {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.openAnswerReviewRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
+}
+.openAnswerReviewRaw {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #55585f;
+}
+.openAnswerReviewRaw small {
+  color: #8a8d94;
+}
+.openAnswerReviewRow input[type="text"],
+.openAnswerReviewRow input:not([type]) {
+  padding: 6px 8px;
+  border: 1px solid #d8dade;
+  border-radius: 7px;
 }
 .resultTable th,
 .resultTable td {
