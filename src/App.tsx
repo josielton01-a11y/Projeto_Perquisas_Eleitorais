@@ -1,8 +1,9 @@
 import { LocalityDistribution } from "./LocalityDistribution";
 import { buildLocalities, distributionValid, localityKey, localitySections } from "./localities";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  type LucideIcon,
   LayoutDashboard,
   ClipboardList,
   MapPinned,
@@ -22,11 +23,8 @@ import {
   Route,
   Clock3,
   CheckCircle2,
-  AlertTriangle,
   Plus,
   MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
   Download,
   PhoneCall,
   Building2,
@@ -48,6 +46,14 @@ import {
   FileText,
   LogOut,
   RefreshCw,
+  KeyRound,
+  Unlock,
+  Moon,
+  Sun,
+  ChevronRight,
+  X,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import streetsRaw from "../dados_entrada/ruas_bonito_geocodificadas.csv?raw";
 import streetCoordinates from "./data/streetCoordinates.json";
@@ -66,30 +72,149 @@ import "./territory-form.css";
 import "./candidate-form.css";
 import "./question-editor.css";
 
-const nav = [
-  ["Visão geral", LayoutDashboard],
-  ["Pesquisas", ClipboardList],
-  ["Banco de perguntas", FileText],
-  ["Território & cotas", MapPinned],
-  ["Mapa de cobertura", Map],
-  ["Equipe & rotas", Users],
-  ["Relatórios", ChartNoAxesCombined],
-  ["Permissões", UserRoundCheck],
-] as const;
+// Estrutura da Plataforma — a navegação deixou de ser um array fixo no
+// código e passou a vir da tabela pulso_nav_items (ver migration
+// 202610020003_nav_structure.sql). Este mapa só resolve o nome do ícone
+// (string salva no banco) pro componente lucide real; o ícone de fallback
+// cobre um valor ausente/desconhecido sem quebrar a tela.
+type NavKind = "area" | "group" | "page" | "tab";
+type NavStatus = "active" | "inactive" | "building";
+type NavItem = {
+  id: string;
+  parentId: string | null;
+  kind: NavKind;
+  label: string;
+  description: string | null;
+  icon: string | null;
+  route: string | null;
+  position: number;
+  status: NavStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+const NAV_ICONS: Record<string, LucideIcon> = {
+  LayoutDashboard,
+  ClipboardList,
+  FileText,
+  MapPinned,
+  Map,
+  ChartNoAxesCombined,
+  UserRoundCheck,
+  Layers3,
+  Users,
+  ShieldCheck,
+  SlidersHorizontal,
+  Building2,
+  Database,
+  Settings,
+  BarChart3,
+  FileSpreadsheet,
+  Printer,
+  Lock,
+  KeyRound,
+  Search,
+  Bell,
+  PhoneCall,
+  Download,
+  MapPin,
+  Route,
+  Clock3,
+  CheckCircle2,
+  Plus,
+  MoreHorizontal,
+  CloudUpload,
+  Maximize2,
+  Wifi,
+};
+const navIcon = (name: string | null | undefined): LucideIcon =>
+  (name && NAV_ICONS[name]) || Layers3;
+
+const NAV_KIND_LABEL: Record<NavKind, string> = {
+  area: "Área",
+  group: "Grupo",
+  page: "Página",
+  tab: "Aba",
+};
+// As 8 páginas que Module() realmente sabe rotear hoje — mudar a rota de
+// uma delas quebra a navegação até ela, então o formulário avisa antes.
+const REAL_PAGE_ROUTES = new Set([
+  "Visão geral",
+  "Pesquisas",
+  "Banco de perguntas",
+  "Território & cotas",
+  "Mapa de cobertura",
+  "Relatórios",
+  "Permissões",
+  "Estrutura da Plataforma",
+]);
+function kindsAllowedUnder(parentKind: NavKind | null): NavKind[] {
+  if (parentKind === null) return ["area", "group", "page"];
+  if (parentKind === "area") return ["group", "page"];
+  if (parentKind === "group") return ["group", "page"];
+  if (parentKind === "page") return ["tab"];
+  return [];
+}
+function navDepth(item: NavItem, items: NavItem[]): number {
+  let depth = 0;
+  let cur: NavItem | undefined = item;
+  while (cur?.parentId) {
+    cur = items.find((i) => i.id === cur!.parentId);
+    if (!cur) break;
+    depth++;
+  }
+  return depth;
+}
+function isNavDescendant(items: NavItem[], candidateId: string, ofId: string): boolean {
+  let cur = items.find((i) => i.id === candidateId);
+  while (cur?.parentId) {
+    if (cur.parentId === ofId) return true;
+    cur = items.find((i) => i.id === cur!.parentId);
+  }
+  return false;
+}
+function navParentOptions(
+  kind: NavKind,
+  items: NavItem[],
+  excludeId?: string,
+): { id: string | null; label: string }[] {
+  const options: { id: string | null; label: string }[] = [];
+  if (kindsAllowedUnder(null).includes(kind)) options.push({ id: null, label: "— Raiz —" });
+  for (const it of items) {
+    if (excludeId && (it.id === excludeId || isNavDescendant(items, it.id, excludeId))) continue;
+    if (kindsAllowedUnder(it.kind).includes(kind)) {
+      options.push({ id: it.id, label: "—".repeat(navDepth(it, items)) + " " + it.label });
+    }
+  }
+  return options;
+}
 
 function Stat({
   label,
   value,
   note,
   tone = "dark",
+  onClick,
 }: {
   label: string;
   value: string;
   note: string;
   tone?: string;
+  onClick?: () => void;
 }) {
   return (
-    <article className={"stat " + tone}>
+    <article
+      className={"stat " + tone + (onClick ? " statClickable" : "")}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") onClick();
+            }
+          : undefined
+      }
+    >
       <div className="statTop">
         <span>{label}</span>
         <ArrowUpRight size={18} />
@@ -99,12 +224,96 @@ function Stat({
     </article>
   );
 }
+// Cabeçalho de página/módulo padronizado — substitui os 3+ cabeçalhos
+// escritos à mão (.moduleHero, .researchHeader, .coverageHeader...) que
+// faziam a mesma coisa de jeitos ligeiramente diferentes.
+function PageHeader({
+  eyebrow,
+  title,
+  description,
+  actions,
+}: {
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="pageHeader">
+      <div>
+        {eyebrow && <p className="eyebrow">{eyebrow}</p>}
+        <h1>{title}</h1>
+        {description && <p className="pageHeaderDescription">{description}</p>}
+      </div>
+      {actions && <div className="pageHeaderActions">{actions}</div>}
+    </div>
+  );
+}
+// Estado vazio padronizado — reaproveita a classe .agentHint já usada em
+// ~30 lugares (não muda o CSS existente nem o texto de cada chamada, só
+// dá uma estrutura/ícone consistente a quem usar o componente a partir
+// de agora).
+function EmptyState({
+  message,
+  title,
+  icon,
+  action,
+  center,
+}: {
+  message: string;
+  title?: string;
+  icon?: ReactNode;
+  action?: ReactNode;
+  center?: boolean;
+}) {
+  return (
+    <div className={"emptyState" + (center ? " emptyStateCenter" : "")}>
+      {icon && <div className="emptyStateIcon">{icon}</div>}
+      {title && <b>{title}</b>}
+      <p className="agentHint">{message}</p>
+      {action}
+    </div>
+  );
+}
+// Abas padronizadas — reaproveita as classes já existentes (filterPills
+// pro estilo "pill", modalTabs pro estilo de aba com sublinhado usado no
+// modal de pesquisa) em vez de recriar o visual; só centraliza o padrão
+// de marcação/clique que hoje é copiado à mão em ~5 lugares diferentes.
+function Tabs<T extends string>({
+  value,
+  onChange,
+  options,
+  variant = "pills",
+  className,
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  options: { value: T; label: string; icon?: ReactNode }[];
+  variant?: "pills" | "modal";
+  className?: string;
+}) {
+  const base = variant === "modal" ? "modalTabs" : "filterPills";
+  return (
+    <div className={className ? `${base} ${className}` : base}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          className={value === opt.value ? "selected" : ""}
+          onClick={() => onChange(opt.value)}
+        >
+          {opt.icon}
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 function Ring({ value }: { value: number }) {
   return (
     <div
       className="ring"
       style={{
-        background: `conic-gradient(#c79a35 ${value * 3.6}deg,#eceef1 0)`,
+        background: `conic-gradient(#0b5fc6 ${value * 3.6}deg,#eceef1 0)`,
       }}
     >
       <div>
@@ -114,9 +323,11 @@ function Ring({ value }: { value: number }) {
     </div>
   );
 }
+// Paleta analítica (série de gráficos) — alinhada aos tokens --chart-1..8
+// em styles.css; usar só quando múltiplas séries exigirem distinção.
 const chartPalette = [
-  "#c79a35", "#4b8c5e", "#3f6fb0", "#a2455e", "#8a5fb5",
-  "#c97b2e", "#3f9aa6", "#8a8f3f", "#b0557a", "#5f7bd0",
+  "#2563eb", "#16a34a", "#d97706", "#7c3aed",
+  "#0891b2", "#dc2626", "#4f46e5", "#65a30d",
 ];
 type ChartDatum = { label: string; value: number };
 type ChartType = "barras-h" | "barras-v" | "pizza" | "rosca";
@@ -370,7 +581,11 @@ export function App() {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("pulso-nav") === "1",
   );
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => (document.documentElement.dataset.theme as "light" | "dark") || "light",
+  );
   const [mobile, setMobile] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [page, setPage] = useState("Visão geral");
   const [agentMode, setAgentMode] = useState(false);
   const [entryChoice, setEntryChoice] = useState<"admin" | "agent" | null>(null);
@@ -378,9 +593,35 @@ export function App() {
   const [toast, setToast] = useState("");
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem("pulso-supabase-admin-token") || "");
   const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
+  const [navItems, setNavItems] = useState<NavItem[]>([]);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const reloadNav = () => {
+    if (!adminToken) return;
+    supabase.rpc("pulso_admin_list_nav_tree", { p_token: adminToken }).then(({ data }) => {
+      setNavItems(Array.isArray(data) ? data : []);
+    });
+  };
+  useEffect(reloadNav, [adminToken]);
   useEffect(() => {
     localStorage.setItem("pulso-nav", collapsed ? "1" : "0");
   }, [collapsed]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("pulso-theme", theme);
+  }, [theme]);
+  // Ctrl+K / Cmd+K foca a busca já existente na topbar — não há Command
+  // Palette nem busca funcional implementada ainda, então é só isso: focar
+  // o campo que já existe, em vez de inventar um mecanismo novo.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    addEventListener("keydown", onKeyDown);
+    return () => removeEventListener("keydown", onKeyDown);
+  }, []);
   useEffect(() => {
     const a = () => setOnline(true),
       b = () => setOnline(false);
@@ -449,37 +690,60 @@ export function App() {
             <b>PULSO</b>
             <span>inteligência de campo</span>
           </div>
-          <button
-            className="icon collapse"
-            onClick={() => setCollapsed(!collapsed)}
-          >
-            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-          </button>
         </div>
         <nav>
-          {nav.map(([n, I]) => (
-            <button
-              key={n}
-              className={page === n ? "active" : ""}
-              onClick={() => {
-                setPage(n);
-                setMobile(false);
-              }}
-            >
-              <I />
-              <span>{n}</span>
-            </button>
-          ))}
+          {navItems
+            .filter((i) => !i.parentId && i.status !== "inactive" && i.route !== "Estrutura da Plataforma")
+            .sort((a, b) => a.position - b.position)
+            .map((i) => {
+              const n = i.route || i.label;
+              const I = navIcon(i.icon);
+              return (
+                <button
+                  key={i.id}
+                  className={page === n ? "active" : ""}
+                  title={i.label}
+                  aria-current={page === n ? "page" : undefined}
+                  onClick={() => {
+                    setPage(n);
+                    setMobile(false);
+                  }}
+                >
+                  <I />
+                  <span>{i.label}</span>
+                </button>
+              );
+            })}
         </nav>
         <div className="sideFoot">
           <button onClick={() => setAgentMode(true)}>
             <PhoneCall />
             <span>App do agente</span>
           </button>
-          <button>
+          <button
+            className={settingsOpen ? "active" : ""}
+            onClick={() => setSettingsOpen(!settingsOpen)}
+            title="Configurações"
+            aria-expanded={settingsOpen}
+          >
             <Settings />
             <span>Configurações</span>
+            <ChevronDown className={"sideFootChevron" + (settingsOpen ? " sideFootChevronOpen" : "")} size={15} />
           </button>
+          {settingsOpen && (
+            <div className="sideFootSub">
+              <button
+                className={page === "Estrutura da Plataforma" ? "active" : ""}
+                onClick={() => {
+                  setPage("Estrutura da Plataforma");
+                  setMobile(false);
+                }}
+              >
+                <Layers3 />
+                <span>Estrutura da Plataforma</span>
+              </button>
+            </div>
+          )}
           <div className="profile">
             <div>JC</div>
             <span>
@@ -487,7 +751,7 @@ export function App() {
               <small>Administrador geral</small>
             </span>
           </div>
-          <button className="logoutBtn" onClick={logoutAdmin}>
+          <button className="logoutBtn" onClick={logoutAdmin} title="Sair">
             <LogOut />
             <span>Sair</span>
           </button>
@@ -496,7 +760,14 @@ export function App() {
       {mobile && <div className="scrim" onClick={() => setMobile(false)} />}
       <main>
         <header>
-          <button className="menuBtn" onClick={() => setMobile(true)}>
+          <button className="menuBtn" onClick={() => setMobile(true)} title="Abrir menu">
+            <Menu />
+          </button>
+          <button
+            className="icon collapse"
+            onClick={() => setCollapsed(!collapsed)}
+            title={collapsed ? "Expandir menu" : "Recolher menu"}
+          >
             <Menu />
           </button>
           <div className="city">
@@ -508,20 +779,35 @@ export function App() {
           <div className="headActions">
             <label>
               <Search />
-              <input placeholder="Buscar no sistema..." />
+              <input
+                ref={searchInputRef}
+                placeholder="Buscar módulos e funcionalidades..."
+              />
+              <kbd className="kbdHint">Ctrl K</kbd>
             </label>
-            <button className="icon">
+            <button className="icon" title="Notificações">
               <Bell />
             </button>
-            <button className="fieldApp" onClick={() => setAgentMode(true)}>
+            <button
+              className="icon"
+              title={theme === "dark" ? "Modo claro" : "Modo escuro"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun /> : <Moon />}
+            </button>
+            <button
+              className="fieldApp"
+              onClick={() => setAgentMode(true)}
+              title="Abrir o app do agente de campo"
+            >
               <PhoneCall /> App do agente
             </button>
           </div>
         </header>
         {page === "Visão geral" ? (
-          <Dashboard online={online} act={act} adminToken={adminToken} />
+          <Dashboard act={act} adminToken={adminToken} onNavigate={setPage} />
         ) : (
-          <Module page={page} act={act} adminToken={adminToken} />
+          <Module page={page} act={act} adminToken={adminToken} navItems={navItems} reloadNav={reloadNav} />
         )}
       </main>
       {toast && (
@@ -534,14 +820,24 @@ export function App() {
   );
 }
 
+// Atalhos reais pro bloco "Acesso rápido" da Home — mesmas rotas do
+// Sidebar, sem duplicar nada (não existe sistema de favoritos/recentes
+// hoje, então isso cobre só o atalho direto já pedido).
+const quickAccessItems: Array<[string, string, typeof LayoutDashboard]> = [
+  ["Pesquisas", "Gerenciar rodadas, cotas e agentes", ClipboardList],
+  ["Banco de perguntas", "Cadastrar e organizar perguntas", FileText],
+  ["Território & cotas", "Ruas e localidades cadastradas", MapPinned],
+  ["Relatórios", "Planilhas, gráficos e resultado", ChartNoAxesCombined],
+  ["Mapa de cobertura", "Acompanhar cobertura em campo", Map],
+];
 function Dashboard({
-  online,
   act,
   adminToken,
+  onNavigate,
 }: {
-  online: boolean;
   act: (x: string) => void;
   adminToken: string;
+  onNavigate: (page: string) => void;
 }) {
   const [dashboardResearches, setDashboardResearches] = useState<Research[] | null>(null);
   useEffect(() => {
@@ -564,7 +860,27 @@ function Dashboard({
           <Stat label="Pendentes de envio" value="0" note="Nenhum envio pendente" tone="light" />
           <Stat label="Alertas de auditoria" value="0" note="Nenhum alerta" tone="warn" />
         </div>
-        <section className="panel progressPanel"><div className="panelTitle"><div><span className="kicker">PROGRESSO GERAL</span><h3>Cobertura por localidade</h3></div></div><div className="progressBody"><Ring value={0} /><p>Nenhuma cota configurada.</p></div></section>
+        <section className="panel quickAccessPanel">
+          <div className="panelTitle">
+            <div>
+              <span className="kicker">NAVEGAÇÃO</span>
+              <h3>Acesso rápido</h3>
+            </div>
+          </div>
+          <div className="quickAccessGrid">
+            {quickAccessItems.map(([label, desc, Icon]) => (
+              <button key={label} className="quickAccessItem" onClick={() => onNavigate(label)}>
+                <span className="quickAccessIcon">
+                  <Icon />
+                </span>
+                <span>
+                  <b>{label}</b>
+                  <small>{desc}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
     );
   }
@@ -581,19 +897,7 @@ function Dashboard({
     : 0;
   const dashAgents = activeResearch?.agents || [];
   const dashActiveAgents = dashAgents.filter((a) => !a.blocked);
-  const dashInterviews = activeResearch?.interviews || [];
   const dashQuotas = Object.entries(activeResearch?.quotas || {});
-  // Contagem por localidade em uma única passada (O(quotas + entrevistas)),
-  // em vez de re-filtrar dashInterviews inteira para cada localidade —
-  // O(quotas × entrevistas) do código anterior.
-  const normalizeLocality = (v: string) => (v || "").trim().toLocaleUpperCase("pt-BR");
-  const areaByNormalized: Record<string, string> = {};
-  for (const [area] of dashQuotas) areaByNormalized[normalizeLocality(area)] = area;
-  const dashDoneByLocality: Record<string, number> = {};
-  for (const iv of dashInterviews) {
-    const area = areaByNormalized[normalizeLocality(iv.locality)];
-    if (area) dashDoneByLocality[area] = (dashDoneByLocality[area] || 0) + 1;
-  }
 
   return (
     <div className="content">
@@ -647,6 +951,7 @@ function Dashboard({
               ? `de ${dashTarget} previstas · ${dashPct}%`
               : "Amostra ainda não definida"
           }
+          onClick={() => onNavigate("Relatórios")}
         />
         <Stat
           label="Agentes em campo"
@@ -657,6 +962,7 @@ function Dashboard({
               : "Nenhum agente cadastrado"
           }
           tone="gold"
+          onClick={() => onNavigate("Pesquisas")}
         />
         <Stat
           label="Localidades cobertas"
@@ -667,100 +973,890 @@ function Dashboard({
               : "Nenhuma localidade configurada"
           }
           tone="light"
+          onClick={() => onNavigate("Território & cotas")}
         />
         <Stat
           label="Perguntas no questionário"
           value={String(activeResearch?.questions?.length || 0)}
           note="cadastradas nesta pesquisa"
           tone="warn"
+          onClick={() => onNavigate("Banco de perguntas")}
         />
       </div>
-      <div className="grid2">
-        <section className="panel progressPanel">
-          <div className="panelTitle">
-            <div>
-              <span className="kicker">PROGRESSO GERAL</span>
-              <h3>Cobertura por localidade</h3>
-            </div>
+      <section className="panel quickAccessPanel">
+        <div className="panelTitle">
+          <div>
+            <span className="kicker">NAVEGAÇÃO</span>
+            <h3>Acesso rápido</h3>
           </div>
-          <div className="progressBody">
-            <Ring value={dashPct} />
-            {dashQuotas.length ? (
-              <div className="bars">
-                {dashQuotas.map(([area, quota]) => {
-                  const done = dashDoneByLocality[area] || 0;
-                  return (
-                    <div className="bar" key={area}>
-                      <div>
-                        <span>{area}</span>
-                        <b>
-                          {done} <small>/ {quota}</small>
-                        </b>
-                      </div>
-                      <i>
-                        <em
-                          style={{
-                            width: `${quota ? Math.min(100, (done / Number(quota)) * 100) : 0}%`,
-                          }}
-                        />
-                      </i>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p>Nenhuma cota configurada.</p>
-            )}
-          </div>
-        </section>
-        <section className="panel mapPanel">
-          <div className="panelTitle">
-            <div>
-              <span className="kicker">OPERAÇÃO</span>
-              <h3>Situação dos agentes</h3>
-            </div>
-            <span className={"connection " + (online ? "" : "off")}>
-              {online ? <Wifi /> : <WifiOff />}
-              {online ? "Online" : "Offline"}
-            </span>
-          </div>
-          {dashAgents.length ? (
-            <div className="table">
-              {dashAgents.map((a) => (
-                <div className="tr" key={a.id}>
-                  <span className="person">
-                    <i>
-                      {a.name
-                        .split(" ")
-                        .map((x) => x[0])
-                        .join("")
-                        .slice(0, 2)}
-                    </i>
-                    <b>{a.name}</b>
-                  </span>
-                  <strong>{a.completed || 0} entrevistas</strong>
-                  <span className={"badge " + (a.blocked ? "gray" : "green")}>
-                    {a.blocked ? "Bloqueado" : "Ativo"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="agentHint">Nenhum agente cadastrado ainda.</p>
-          )}
-        </section>
-      </div>
+        </div>
+        <div className="quickAccessGrid">
+          {quickAccessItems.map(([label, desc, Icon]) => (
+            <button
+              key={label}
+              className="quickAccessItem"
+              onClick={() => onNavigate(label)}
+            >
+              <span className="quickAccessIcon">
+                <Icon />
+              </span>
+              <span>
+                <b>{label}</b>
+                <small>{desc}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
 
-function Module({ page, act, adminToken }: { page: string; act: (x: string) => void; adminToken: string }) {
+// Gestão real de contas de administrador — a única parte do pedido de
+// "Configurações" que tem dado de verdade por trás (tabela pulso_admins),
+// por isso é a única construída. Substitui o card fictício "Permissões"
+// que só mostrava "Administradores/Gerentes/Clientes/..." sem função.
+type AdminRow = {
+  username: string;
+  name: string | null;
+  email: string | null;
+  active: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+function formatDateTimeBR(value: string | null) {
+  if (!value) return "Nunca acessou";
+  return new Date(value).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+function AdminUsers({
+  act,
+  adminToken,
+}: {
+  act: (x: string) => void;
+  adminToken: string;
+}) {
+  const [admins, setAdmins] = useState<AdminRow[]>([]);
+  const [me, setMe] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState({ username: "", password: "" });
+  const [editingUsername, setEditingUsername] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({ name: "", email: "" });
+  const [resettingUsername, setResettingUsername] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      supabase.rpc("pulso_admin_list_admins", { p_token: adminToken }),
+      supabase.rpc("pulso_admin_whoami", { p_token: adminToken }),
+    ]).then(([listRes, whoRes]) => {
+      setAdmins(Array.isArray(listRes.data) ? listRes.data : []);
+      setMe(whoRes.data?.username || "");
+      setLoading(false);
+    });
+  };
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminToken]);
+  const createAdmin = async () => {
+    if (!draft.username.trim() || !draft.password) {
+      act("Informe usuário e senha");
+      return;
+    }
+    const { error } = await supabase.rpc("pulso_admin_create_admin", {
+      p_token: adminToken,
+      p_username: draft.username.trim(),
+      p_password: draft.password,
+    });
+    if (error) {
+      act(
+        error.message.includes("already exists")
+          ? "Esse usuário já existe"
+          : "Não foi possível criar o administrador",
+      );
+      return;
+    }
+    setDraft({ username: "", password: "" });
+    act("Administrador criado");
+    load();
+  };
+  const toggleActive = async (username: string, active: boolean) => {
+    const { error } = await supabase.rpc("pulso_admin_set_active", {
+      p_token: adminToken,
+      p_username: username,
+      p_active: active,
+    });
+    if (error) {
+      act(
+        active
+          ? "Não foi possível reativar"
+          : "Não é possível desativar o último administrador ativo",
+      );
+      return;
+    }
+    act(active ? "Administrador reativado" : "Administrador desativado");
+    load();
+  };
+  const startEdit = (a: AdminRow) => {
+    setEditingUsername(a.username);
+    setEditDraft({ name: a.name || "", email: a.email || "" });
+    setResettingUsername(null);
+  };
+  const saveEdit = async (username: string) => {
+    const { error } = await supabase.rpc("pulso_admin_update_profile", {
+      p_token: adminToken,
+      p_username: username,
+      p_name: editDraft.name,
+      p_email: editDraft.email,
+    });
+    if (error) {
+      act("Não foi possível salvar");
+      return;
+    }
+    setEditingUsername(null);
+    act("Dados atualizados");
+    load();
+  };
+  const resetPassword = async (username: string) => {
+    if (!newPassword) {
+      act("Informe a nova senha");
+      return;
+    }
+    const { error } = await supabase.rpc("pulso_admin_reset_password", {
+      p_token: adminToken,
+      p_username: username,
+      p_new_password: newPassword,
+    });
+    if (error) {
+      act("Não foi possível redefinir a senha");
+      return;
+    }
+    setResettingUsername(null);
+    setNewPassword("");
+    act("Senha redefinida");
+  };
+  const deleteAdmin = async (username: string) => {
+    if (!window.confirm(`Excluir definitivamente a conta "${username}"? Esta ação não pode ser desfeita.`)) return;
+    const { error } = await supabase.rpc("pulso_admin_delete_admin", {
+      p_token: adminToken,
+      p_username: username,
+    });
+    if (error) {
+      act(
+        error.message.includes("own account")
+          ? "Você não pode excluir sua própria conta"
+          : "Não é possível excluir o último administrador ativo",
+      );
+      return;
+    }
+    act("Administrador excluído");
+    load();
+  };
+  return (
+    <div className="content">
+      <PageHeader
+        eyebrow="ACESSO ADMINISTRATIVO"
+        title="Permissões"
+        description="Contas com acesso ao painel administrativo do Pulso."
+      />
+      <section className="panel adminCreatePanel">
+        <div className="panelTitle">
+          <div>
+            <span className="kicker">NOVO ACESSO</span>
+            <h3>Adicionar administrador</h3>
+          </div>
+        </div>
+        <div className="adminCreateForm">
+          <input
+            value={draft.username}
+            onChange={(e) => setDraft({ ...draft, username: e.target.value })}
+            placeholder="Usuário"
+          />
+          <input
+            type="password"
+            value={draft.password}
+            onChange={(e) => setDraft({ ...draft, password: e.target.value })}
+            placeholder="Senha"
+          />
+          <button className="primary" onClick={createAdmin}>
+            <Plus /> Adicionar
+          </button>
+        </div>
+      </section>
+      <section className="panel adminListPanel">
+        <div className="panelTitle">
+          <div>
+            <span className="kicker">CONTAS</span>
+            <h3>Administradores cadastrados</h3>
+          </div>
+        </div>
+        {loading ? (
+          <p className="agentHint">Carregando...</p>
+        ) : admins.length ? (
+          <div className="adminTable">
+            <div className="adminTableHead">
+              <span>Nome</span>
+              <span>Situação</span>
+              <span>Último acesso</span>
+              <span>Ações</span>
+            </div>
+            {admins.map((a) => (
+              <Fragment key={a.username}>
+                <div className="adminTableRow">
+                  <span className="adminRowName">
+                    <b>{a.name || a.username}</b>
+                    <small>
+                      {a.email || a.username}
+                      {a.username === me && " · você"}
+                    </small>
+                  </span>
+                  <span className={"badge " + (a.active ? "green" : "gray")}>
+                    {a.active ? "Ativo" : "Desativado"}
+                  </span>
+                  <span className="adminRowLastLogin">{formatDateTimeBR(a.lastLoginAt)}</span>
+                  <span className="adminRowActions">
+                    <button className="icon" title="Editar nome/e-mail" onClick={() => startEdit(a)}>
+                      <SlidersHorizontal />
+                    </button>
+                    <button
+                      className="icon"
+                      title="Redefinir senha"
+                      onClick={() => {
+                        setResettingUsername(a.username);
+                        setEditingUsername(null);
+                        setNewPassword("");
+                      }}
+                    >
+                      <KeyRound />
+                    </button>
+                    <button
+                      className="icon"
+                      title={a.username === me ? "Você não pode desativar sua própria conta" : a.active ? "Desativar" : "Reativar"}
+                      disabled={a.username === me}
+                      onClick={() => toggleActive(a.username, !a.active)}
+                    >
+                      {a.active ? <Lock /> : <Unlock />}
+                    </button>
+                    <button
+                      className="icon iconDanger"
+                      title={a.username === me ? "Você não pode excluir sua própria conta" : "Excluir conta"}
+                      disabled={a.username === me}
+                      onClick={() => deleteAdmin(a.username)}
+                    >
+                      <Trash2 />
+                    </button>
+                  </span>
+                </div>
+                {editingUsername === a.username && (
+                  <div className="adminInlineForm">
+                    <input
+                      value={editDraft.name}
+                      onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
+                      placeholder="Nome"
+                    />
+                    <input
+                      value={editDraft.email}
+                      onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })}
+                      placeholder="E-mail"
+                    />
+                    <button className="primary" onClick={() => saveEdit(a.username)}>
+                      Salvar
+                    </button>
+                    <button className="secondary" onClick={() => setEditingUsername(null)}>
+                      Cancelar
+                    </button>
+                  </div>
+                )}
+                {resettingUsername === a.username && (
+                  <div className="adminInlineForm">
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Nova senha"
+                    />
+                    <button className="primary" onClick={() => resetPassword(a.username)}>
+                      Redefinir
+                    </button>
+                    <button className="secondary" onClick={() => setResettingUsername(null)}>
+                      Cancelar
+                    </button>
+                  </div>
+                )}
+              </Fragment>
+            ))}
+          </div>
+        ) : (
+          <EmptyState message="Nenhum administrador encontrado." />
+        )}
+      </section>
+    </div>
+  );
+}
+
+type NavDraft = {
+  kind: NavKind;
+  parentId: string | null;
+  label: string;
+  description: string;
+  icon: string;
+  route: string;
+  status: NavStatus;
+};
+type NavDrawerState = { mode: "create" | "edit"; item?: NavItem };
+
+function NavTreeNode({
+  item,
+  items,
+  depth,
+  expanded,
+  forceOpen,
+  toggleExpand,
+  visibleIds,
+  onEdit,
+  onAddChild,
+  onMoveSibling,
+  onSetStatus,
+  onDelete,
+  isFirstSibling,
+  isLastSibling,
+}: {
+  item: NavItem;
+  items: NavItem[];
+  depth: number;
+  expanded: Set<string>;
+  forceOpen: boolean;
+  toggleExpand: (id: string) => void;
+  visibleIds: Set<string> | null;
+  onEdit: (item: NavItem) => void;
+  onAddChild: (item: NavItem) => void;
+  onMoveSibling: (item: NavItem, dir: -1 | 1) => void;
+  onSetStatus: (item: NavItem, status: NavStatus) => void;
+  onDelete: (item: NavItem) => void;
+  isFirstSibling: boolean;
+  isLastSibling: boolean;
+}) {
+  const children = items
+    .filter((i) => (i.parentId || null) === item.id)
+    .sort((a, b) => a.position - b.position);
+  const hasChildren = children.length > 0;
+  const isOpen = forceOpen || expanded.has(item.id);
+  const Icon = navIcon(item.icon);
+  return (
+    <div className="navTreeNode">
+      <div className="navTreeRow" style={{ paddingLeft: depth * 20 }}>
+        <button
+          className={"navTreeChevron" + (hasChildren ? "" : " navTreeChevronEmpty")}
+          onClick={() => hasChildren && toggleExpand(item.id)}
+          disabled={!hasChildren}
+        >
+          {hasChildren && (
+            <ChevronRight className={isOpen ? "navTreeChevronOpen" : ""} />
+          )}
+        </button>
+        <span className="navTreeIcon">
+          <Icon />
+        </span>
+        <span className="navTreeLabel">{item.label}</span>
+        <span className={"badge navKind-" + item.kind}>{NAV_KIND_LABEL[item.kind]}</span>
+        <select
+          className={"navStatusSelect navStatus-" + item.status}
+          value={item.status}
+          onChange={(e) => onSetStatus(item, e.target.value as NavStatus)}
+        >
+          <option value="active">Ativo</option>
+          <option value="inactive">Inativo</option>
+          <option value="building">Em construção</option>
+        </select>
+        <div className="navTreeActions">
+          <button className="icon" title="Editar" onClick={() => onEdit(item)}>
+            <Pencil />
+          </button>
+          {item.kind !== "tab" && (
+            <button className="icon" title="Adicionar filho" onClick={() => onAddChild(item)}>
+              <Plus />
+            </button>
+          )}
+          <button
+            className="icon"
+            title="Mover para cima"
+            disabled={isFirstSibling}
+            onClick={() => onMoveSibling(item, -1)}
+          >
+            <ArrowUp />
+          </button>
+          <button
+            className="icon"
+            title="Mover para baixo"
+            disabled={isLastSibling}
+            onClick={() => onMoveSibling(item, 1)}
+          >
+            <ArrowDown />
+          </button>
+          <button className="icon iconDanger" title="Excluir" onClick={() => onDelete(item)}>
+            <Trash2 />
+          </button>
+        </div>
+      </div>
+      {hasChildren && isOpen && (
+        <div className="navTreeChildren">
+          {children.map(
+            (c, idx) =>
+              (!visibleIds || visibleIds.has(c.id)) && (
+                <NavTreeNode
+                  key={c.id}
+                  item={c}
+                  items={items}
+                  depth={depth + 1}
+                  expanded={expanded}
+                  forceOpen={forceOpen}
+                  toggleExpand={toggleExpand}
+                  visibleIds={visibleIds}
+                  onEdit={onEdit}
+                  onAddChild={onAddChild}
+                  onMoveSibling={onMoveSibling}
+                  onSetStatus={onSetStatus}
+                  onDelete={onDelete}
+                  isFirstSibling={idx === 0}
+                  isLastSibling={idx === children.length - 1}
+                />
+              ),
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavStructure({
+  act,
+  adminToken,
+  navItems,
+  reloadNav,
+}: {
+  act: (x: string) => void;
+  adminToken: string;
+  navItems: NavItem[];
+  reloadNav: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [drawer, setDrawer] = useState<NavDrawerState | null>(null);
+  const [draft, setDraft] = useState<NavDraft>({
+    kind: "page",
+    parentId: null,
+    label: "",
+    description: "",
+    icon: "",
+    route: "",
+    status: "active",
+  });
+
+  const toggleExpand = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+  const expandAll = () => {
+    setExpanded(new Set(navItems.filter((i) => navItems.some((c) => c.parentId === i.id)).map((i) => i.id)));
+  };
+  const collapseAll = () => setExpanded(new Set());
+
+  const matchedIds = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+    return new Set(
+      navItems
+        .filter(
+          (i) =>
+            i.label.toLowerCase().includes(q) ||
+            NAV_KIND_LABEL[i.kind].toLowerCase().includes(q) ||
+            (i.route || "").toLowerCase().includes(q),
+        )
+        .map((i) => i.id),
+    );
+  }, [search, navItems]);
+  const visibleIds = useMemo(() => {
+    if (!matchedIds) return null;
+    const visible = new Set<string>();
+    const byId = new globalThis.Map(navItems.map((i) => [i.id, i]));
+    for (const id of matchedIds) {
+      let cur: NavItem | undefined = byId.get(id);
+      while (cur) {
+        visible.add(cur.id);
+        cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+      }
+    }
+    return visible;
+  }, [matchedIds, navItems]);
+
+  const counts = navItems.reduce<Record<string, number>>((acc, i) => {
+    acc[i.kind] = (acc[i.kind] || 0) + 1;
+    return acc;
+  }, {});
+
+  const openCreate = (parentId: string | null) => {
+    const parentKind = parentId ? navItems.find((i) => i.id === parentId)?.kind ?? null : null;
+    const allowed = kindsAllowedUnder(parentKind);
+    setDrawer({ mode: "create" });
+    setDraft({
+      kind: allowed[0] || "page",
+      parentId,
+      label: "",
+      description: "",
+      icon: "",
+      route: "",
+      status: "active",
+    });
+  };
+  const openEdit = (item: NavItem) => {
+    setDrawer({ mode: "edit", item });
+    setDraft({
+      kind: item.kind,
+      parentId: item.parentId,
+      label: item.label,
+      description: item.description || "",
+      icon: item.icon || "",
+      route: item.route || "",
+      status: item.status,
+    });
+  };
+  const closeDrawer = () => setDrawer(null);
+
+  const moveSibling = async (item: NavItem, dir: -1 | 1) => {
+    const sibs = navItems
+      .filter((i) => (i.parentId || null) === (item.parentId || null))
+      .sort((a, b) => a.position - b.position);
+    const idx = sibs.findIndex((i) => i.id === item.id);
+    const swapWith = idx + dir;
+    if (swapWith < 0 || swapWith >= sibs.length) return;
+    const ids = sibs.map((i) => i.id);
+    [ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]];
+    const { error } = await supabase.rpc("pulso_admin_reorder_nav_items", {
+      p_token: adminToken,
+      p_parent_id: item.parentId,
+      p_ordered_ids: ids,
+    });
+    if (error) {
+      act("Não foi possível reordenar");
+      return;
+    }
+    reloadNav();
+  };
+  const setStatus = async (item: NavItem, status: NavStatus) => {
+    const { error } = await supabase.rpc("pulso_admin_set_nav_status", {
+      p_token: adminToken,
+      p_id: item.id,
+      p_status: status,
+    });
+    if (error) {
+      act("Não foi possível atualizar o status");
+      return;
+    }
+    reloadNav();
+  };
+  const deleteItem = async (item: NavItem) => {
+    if (!window.confirm(`Excluir "${item.label}"? Esta ação não pode ser desfeita.`)) return;
+    const { error } = await supabase.rpc("pulso_admin_delete_nav_item", {
+      p_token: adminToken,
+      p_id: item.id,
+    });
+    if (error) {
+      const m = /has_children:(\d+)/.exec(error.message);
+      act(
+        m
+          ? `Este item possui ${m[1]} item(ns) — remova ou mova os filhos antes de excluir.`
+          : "Não foi possível excluir",
+      );
+      return;
+    }
+    act("Item excluído");
+    reloadNav();
+  };
+  const saveDraft = async () => {
+    if (!draft.label.trim()) {
+      act("Informe o nome");
+      return;
+    }
+    if (drawer?.mode === "create") {
+      const { error } = await supabase.rpc("pulso_admin_create_nav_item", {
+        p_token: adminToken,
+        p_parent_id: draft.parentId,
+        p_kind: draft.kind,
+        p_label: draft.label.trim(),
+        p_description: draft.description,
+        p_icon: draft.icon,
+        p_route: draft.route,
+        p_status: draft.status,
+      });
+      if (error) {
+        act(
+          error.message.includes("already exists")
+            ? "Já existe um item com esse nome neste nível"
+            : "Não foi possível criar o item",
+        );
+        return;
+      }
+      act("Item criado");
+      closeDrawer();
+      reloadNav();
+      return;
+    }
+    if (drawer?.mode === "edit" && drawer.item) {
+      const original = drawer.item;
+      const parentChanged = (draft.parentId || null) !== (original.parentId || null);
+      const routeChanged = draft.route !== (original.route || "");
+      if (original.kind === "page" && routeChanged && REAL_PAGE_ROUTES.has(original.route || "")) {
+        if (
+          !window.confirm(
+            "Alterar esta rota pode afetar links, favoritos e referências existentes. Continuar?",
+          )
+        )
+          return;
+      }
+      if (parentChanged) {
+        if (!window.confirm(`Mover "${original.label}" para outro local da árvore?`)) return;
+        const { error: moveError } = await supabase.rpc("pulso_admin_move_nav_item", {
+          p_token: adminToken,
+          p_id: original.id,
+          p_new_parent_id: draft.parentId,
+        });
+        if (moveError) {
+          act("Não foi possível mover o item");
+          return;
+        }
+      }
+      const { error } = await supabase.rpc("pulso_admin_update_nav_item", {
+        p_token: adminToken,
+        p_id: original.id,
+        p_label: draft.label.trim(),
+        p_description: draft.description,
+        p_icon: draft.icon,
+        p_route: draft.route,
+        p_status: draft.status,
+      });
+      if (error) {
+        act(
+          error.message.includes("already exists")
+            ? "Já existe um item com esse nome neste nível"
+            : "Não foi possível salvar as alterações",
+        );
+        return;
+      }
+      act("Alterações salvas");
+      closeDrawer();
+      reloadNav();
+    }
+  };
+
+  const rootItems = navItems.filter((i) => !i.parentId).sort((a, b) => a.position - b.position);
+  const drawerKindOptions =
+    drawer?.mode === "edit"
+      ? [draft.kind]
+      : kindsAllowedUnder(draft.parentId ? navItems.find((i) => i.id === draft.parentId)?.kind ?? null : null);
+
+  return (
+    <div className="content">
+      <PageHeader
+        eyebrow="CONFIGURAÇÕES"
+        title="Estrutura da Plataforma"
+        description="Organize áreas, grupos, páginas e abas da plataforma."
+        actions={
+          <div className="navHeaderActions">
+            <span className="navCounters">
+              Áreas: {counts.area || 0} · Grupos: {counts.group || 0} · Páginas: {counts.page || 0} · Abas:{" "}
+              {counts.tab || 0}
+            </span>
+            <label className="navSearchBox">
+              <Search />
+              <input
+                placeholder="Buscar na estrutura..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </label>
+            <button className="secondary" onClick={expandAll}>
+              Expandir tudo
+            </button>
+            <button className="secondary" onClick={collapseAll}>
+              Recolher tudo
+            </button>
+            <button className="primary" onClick={() => openCreate(null)}>
+              <Plus /> Novo item
+            </button>
+          </div>
+        }
+      />
+      <section className="panel navTreePanel">
+        {navItems.length === 0 ? (
+          <EmptyState message="Carregando estrutura..." />
+        ) : (
+          <div className="navTree">
+            {rootItems.map(
+              (item, idx) =>
+                (!visibleIds || visibleIds.has(item.id)) && (
+                  <NavTreeNode
+                    key={item.id}
+                    item={item}
+                    items={navItems}
+                    depth={0}
+                    expanded={expanded}
+                    forceOpen={!!matchedIds}
+                    toggleExpand={toggleExpand}
+                    visibleIds={visibleIds}
+                    onEdit={openEdit}
+                    onAddChild={(it) => openCreate(it.id)}
+                    onMoveSibling={moveSibling}
+                    onSetStatus={setStatus}
+                    onDelete={deleteItem}
+                    isFirstSibling={idx === 0}
+                    isLastSibling={idx === rootItems.length - 1}
+                  />
+                ),
+            )}
+          </div>
+        )}
+      </section>
+      {drawer && (
+        <div className="modalShade" onClick={closeDrawer}>
+          <div className="navDrawer" onClick={(e) => e.stopPropagation()}>
+            <div className="navDrawerHead">
+              <h3>{drawer.mode === "create" ? "Novo item" : `Editar ${NAV_KIND_LABEL[draft.kind]}`}</h3>
+              <button className="icon" onClick={closeDrawer}>
+                <X />
+              </button>
+            </div>
+            <div className="navDrawerBody">
+              <label>
+                Tipo
+                <select
+                  value={draft.kind}
+                  disabled={drawer.mode === "edit"}
+                  onChange={(e) => setDraft({ ...draft, kind: e.target.value as NavKind })}
+                >
+                  {drawerKindOptions.map((k) => (
+                    <option key={k} value={k}>
+                      {NAV_KIND_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Pai
+                <select
+                  value={draft.parentId || ""}
+                  onChange={(e) => setDraft({ ...draft, parentId: e.target.value || null })}
+                >
+                  {navParentOptions(draft.kind, navItems, drawer.mode === "edit" ? drawer.item?.id : undefined).map(
+                    (o) => (
+                      <option key={o.id || "root"} value={o.id || ""}>
+                        {o.label}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
+              <label>
+                Nome *
+                <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
+              </label>
+              <label>
+                Descrição
+                <textarea
+                  value={draft.description}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                />
+              </label>
+              <label>
+                Ícone
+                <select value={draft.icon} onChange={(e) => setDraft({ ...draft, icon: e.target.value })}>
+                  <option value="">— sem ícone —</option>
+                  {Object.keys(NAV_ICONS)
+                    .sort()
+                    .map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {draft.icon && NAV_ICONS[draft.icon] && (
+                <div className="navIconPreview">
+                  {(() => {
+                    const PreviewIcon = navIcon(draft.icon);
+                    return <PreviewIcon />;
+                  })()}
+                  <span>{draft.label || "Nome do item"}</span>
+                </div>
+              )}
+              {draft.kind === "page" && (
+                <label>
+                  Rota/identificador
+                  <input value={draft.route} onChange={(e) => setDraft({ ...draft, route: e.target.value })} />
+                </label>
+              )}
+              {draft.kind === "tab" && (
+                <p className="navDrawerHint">
+                  Abas administráveis aqui ainda não alteram as abas reais de nenhuma tela — este
+                  cadastro só organiza a estrutura, sem efeito nas telas existentes.
+                </p>
+              )}
+              <label>
+                Status
+                <select
+                  value={draft.status}
+                  onChange={(e) => setDraft({ ...draft, status: e.target.value as NavStatus })}
+                >
+                  <option value="active">Ativo</option>
+                  <option value="inactive">Inativo</option>
+                  <option value="building">Em construção</option>
+                </select>
+              </label>
+            </div>
+            <div className="navDrawerFoot">
+              <button className="secondary" onClick={closeDrawer}>
+                Cancelar
+              </button>
+              <button className="primary" onClick={saveDraft}>
+                {drawer.mode === "create" ? "Criar" : "Salvar alterações"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Module({
+  page,
+  act,
+  adminToken,
+  navItems,
+  reloadNav,
+}: {
+  page: string;
+  act: (x: string) => void;
+  adminToken: string;
+  navItems: NavItem[];
+  reloadNav: () => void;
+}) {
   if (page === "Pesquisas") return <Researches act={act} adminToken={adminToken} />;
   if (page === "Relatórios") return <Researches act={act} adminToken={adminToken} reportOnly />;
   if (page === "Banco de perguntas") return <QuestionBank adminToken={adminToken} act={act} />;
   if (page === "Território & cotas") return <Territory act={act} adminToken={adminToken} />;
   if (page === "Mapa de cobertura") return <CoverageMap />;
-  const Icon = nav.find((x) => x[0] === page)?.[1] || Building2;
+  if (page === "Permissões") return <AdminUsers act={act} adminToken={adminToken} />;
+  if (page === "Estrutura da Plataforma")
+    return <NavStructure act={act} adminToken={adminToken} navItems={navItems} reloadNav={reloadNav} />;
   const cards: Record<string, string[]> = {
     "Equipe & rotas": [
       "10 entrevistadores",
@@ -787,33 +1883,22 @@ function Module({ page, act, adminToken }: { page: string; act: (x: string) => v
       "Municípios",
       "Cargos e classificações",
     ],
-    Permissões: [
-      "Administradores",
-      "Gerentes",
-      "Clientes",
-      "Acesso a dados sensíveis",
-    ],
   };
   return (
     <div className="content module">
-      <div className="moduleHero">
-        <div className="bigIcon">
-          <Icon />
-        </div>
-        <div>
-          <p className="eyebrow">GESTÃO DA PESQUISA</p>
-          <h1>{page}</h1>
-          <p>
-            Estrutura preparada para configuração e conexão com dados reais.
-          </p>
-        </div>
-        <button
-          className="primary"
-          onClick={() => act("Novo registro criado como rascunho")}
-        >
-          <Plus /> Novo registro
-        </button>
-      </div>
+      <PageHeader
+        eyebrow="GESTÃO DA PESQUISA"
+        title={page}
+        description="Estrutura preparada para configuração e conexão com dados reais."
+        actions={
+          <button
+            className="primary"
+            onClick={() => act("Novo registro criado como rascunho")}
+          >
+            <Plus /> Novo registro
+          </button>
+        }
+      />
       <div className="moduleGrid">
         {(cards[page] || []).map((x, i) => (
           <article className="moduleCard" key={x}>
@@ -1421,9 +2506,9 @@ function QuestionBank({ adminToken, act }: { adminToken: string; act: (x: string
           )}
         </div>
         {!questions.length ? (
-          <p className="agentHint">Nenhuma pergunta cadastrada.</p>
+          <EmptyState message="Nenhuma pergunta cadastrada." />
         ) : !filteredQuestions.length ? (
-          <p className="agentHint">Nenhuma pergunta neste bloco.</p>
+          <EmptyState message="Nenhuma pergunta neste bloco." />
         ) : (
           filteredQuestions.map((q) => (
             <Fragment key={q.id}>
@@ -2907,11 +3992,12 @@ function Researches({ act, adminToken, reportOnly }: { act: (x: string) => void;
             </article>
           ))}
           {!filtered.length && (
-            <div className="noResults">
-              <Search />
-              <b>Nenhuma pesquisa encontrada</b>
-              <span>Ajuste a busca ou selecione outro status.</span>
-            </div>
+            <EmptyState
+              center
+              icon={<Search />}
+              title="Nenhuma pesquisa encontrada"
+              message="Ajuste a busca ou selecione outro status."
+            />
           )}
         </div>
       </section>
@@ -4153,38 +5239,18 @@ function Researches({ act, adminToken, reportOnly }: { act: (x: string) => void;
                     <Printer /> Imprimir
                   </button>
                 </div>
-                <div className="filterPills reportViewPicker">
-                  <button
-                    className={reportView === "planilha" ? "selected" : ""}
-                    onClick={() => setReportView("planilha")}
-                  >
-                    <FileSpreadsheet /> Planilha
-                  </button>
-                  <button
-                    className={reportView === "graficos" ? "selected" : ""}
-                    onClick={() => setReportView("graficos")}
-                  >
-                    <BarChart3 /> Gráficos
-                  </button>
-                  <button
-                    className={reportView === "resultado" ? "selected" : ""}
-                    onClick={() => setReportView("resultado")}
-                  >
-                    <FileText /> Resultado da pesquisa
-                  </button>
-                  <button
-                    className={reportView === "comparar" ? "selected" : ""}
-                    onClick={() => setReportView("comparar")}
-                  >
-                    <ChartNoAxesCombined /> Comparar pesquisas
-                  </button>
-                  <button
-                    className={reportView === "revisar" ? "selected" : ""}
-                    onClick={() => setReportView("revisar")}
-                  >
-                    <Pencil /> Revisar respostas
-                  </button>
-                </div>
+                <Tabs
+                  className="reportViewPicker"
+                  value={reportView}
+                  onChange={setReportView}
+                  options={[
+                    { value: "planilha", label: "Planilha", icon: <FileSpreadsheet /> },
+                    { value: "graficos", label: "Gráficos", icon: <BarChart3 /> },
+                    { value: "resultado", label: "Resultado da pesquisa", icon: <FileText /> },
+                    { value: "comparar", label: "Comparar pesquisas", icon: <ChartNoAxesCombined /> },
+                    { value: "revisar", label: "Revisar respostas", icon: <Pencil /> },
+                  ]}
+                />
                 {reportView !== "planilha" && reportView !== "revisar" && (
                   <style>{"@media print { @page { size: landscape; } }"}</style>
                 )}
@@ -4767,11 +5833,7 @@ function Researches({ act, adminToken, reportOnly }: { act: (x: string) => void;
                           tabelas.
                         </p>
                       ) : !(editing.interviews || []).length ? (
-                        <p className="agentHint">
-                          Nenhuma entrevista registrada ainda. As tabelas
-                          aparecem aqui conforme os agentes forem salvando
-                          entrevistas pelo Pulso Campo.
-                        </p>
+                        <EmptyState message="Nenhuma entrevista registrada ainda. As tabelas aparecem aqui conforme os agentes forem salvando entrevistas pelo Pulso Campo." />
                       ) : (
                         reportResultadoQuestions.map(
                           ({ question, rows, totalRow }, index) => (
@@ -5281,7 +6343,7 @@ function AgentCoverageMap({
               radius={7}
               pathOptions={{
                 color: "#fff",
-                fillColor: visited.has(street.id) ? "#45a060" : "#c79a35",
+                fillColor: visited.has(street.id) ? "#45a060" : "#0b5fc6",
                 fillOpacity: 1,
                 weight: 2,
               }}
@@ -5318,7 +6380,7 @@ function AgentCoverageMap({
 
 type AgentMapPoint={id:string;name:string;lat:number;lng:number;area:string;completed:number;target:number;status:string;updatedAt:string};
 function MapResize(){const map=useMap();useEffect(()=>{const resize=()=>setTimeout(()=>map.invalidateSize(),100);document.addEventListener('fullscreenchange',resize);return()=>document.removeEventListener('fullscreenchange',resize)},[map]);return null}
-function CoverageMap(){const mapRef=useRef<HTMLDivElement>(null);const [query,setQuery]=useState('');const [showStreets,setShowStreets]=useState(true);const [showLines,setShowLines]=useState(false);const agents=useMemo<AgentMapPoint[]>(()=>{try{return JSON.parse(localStorage.getItem('pulso-agent-locations')||'[]')}catch{return[]}},[]);const filteredStreets=streetCoordinates.filter(street=>`${street.name} ${street.neighborhood} ${street.district}`.toLocaleLowerCase('pt-BR').includes(query.toLocaleLowerCase('pt-BR')));const center=useMemo<[number,number]>(()=>{const valid=streetCoordinates.filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lng));return [valid.reduce((s,x)=>s+x.lat,0)/valid.length,valid.reduce((s,x)=>s+x.lng,0)/valid.length]},[]);const fullscreen=()=>{if(!document.fullscreenElement)mapRef.current?.requestFullscreen();else document.exitFullscreen()};return <div className="content coveragePage"><div className="coverageHeader"><div><p className="eyebrow">OPERAÇÃO TERRITORIAL</p><h1>Mapa de cobertura</h1><p>Ruas georreferenciadas, agentes em campo e andamento da coleta.</p></div><div className="coverageMetrics"><span><b>{streetCoordinates.length}</b> ruas com coordenadas</span><span><b>{agents.length}</b> agentes com GPS</span></div></div><div className="mapWorkspace"><aside className="mapSide"><label><Search/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar rua ou bairro..."/></label><div className="mapLayerTitle"><Layers3/> Camadas do mapa</div><button className={showStreets?'on':''} onClick={()=>setShowStreets(!showStreets)}><i className="layerDot streetDot"/><span><b>Pontos centrais das ruas</b><small>{filteredStreets.length} visíveis</small></span></button><button className={showLines?'on':''} onClick={()=>setShowLines(!showLines)}><i className="layerDot lineDot"/><span><b>Traçado das ruas</b><small>Geometria importada do KML</small></span></button><button className="on"><i className="layerDot agentDot"/><span><b>Agentes em campo</b><small>{agents.length?`${agents.length} com GPS ativo`:'Aguardando check-ins reais'}</small></span></button><div className="mapStatus"><ShieldCheck/><p><b>Base geográfica vinculada</b><span>633 de 636 ruas receberam latitude e longitude. Três ficaram pendentes para revisão manual.</span></p></div>{!agents.length&&<div className="noAgentGps"><MapPin/><p><b>Nenhum agente com localização ativa</b><span>Os cartões aparecerão ao passar o mouse sobre os pontos após o primeiro check-in GPS.</span></p></div>}</aside><div className="leafletShell" ref={mapRef}><button className="expandMap" onClick={fullscreen}><Maximize2/> Expandir mapa</button><MapContainer center={center} zoom={14} className="coverageLeaflet" zoomControl={true}><MapResize/><TileLayer attribution='Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics' url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"/>{showLines&&filteredStreets.map(street=><Polyline key={`line-${street.id}`} positions={street.line.map(point=>[point[1],point[0]] as [number,number])} pathOptions={{color:'#e3b341',weight:2,opacity:.78}}/>)}{showStreets&&filteredStreets.map(street=><CircleMarker key={street.id} center={[street.lat,street.lng]} radius={3} pathOptions={{color:'#201d17',fillColor:'#e7b746',fillOpacity:.9,weight:1}}><Tooltip direction="top" offset={[0,-4]} opacity={1}><div className="streetTooltip"><small>LOGRADOURO</small><b>{street.name}</b><span>{street.neighborhood||street.district} · {street.cep||'CEP não informado'}</span><em>{street.lat.toFixed(6)}, {street.lng.toFixed(6)}</em></div></Tooltip></CircleMarker>)}{agents.map(agent=><CircleMarker key={agent.id} center={[agent.lat,agent.lng]} radius={9} pathOptions={{color:'#fff',fillColor:'#45a060',fillOpacity:1,weight:3}}><Tooltip direction="top" offset={[0,-8]} opacity={1}><div className="agentTooltip"><div><i>{agent.name.split(' ').map(x=>x[0]).join('').slice(0,2)}</i><span><small>AGENTE EM CAMPO</small><b>{agent.name}</b></span></div><p><span>Localidade <b>{agent.area}</b></span><span>Andamento <b>{agent.completed} de {agent.target}</b></span><span>Status <b>{agent.status}</b></span><span>Atualizado <b>{agent.updatedAt}</b></span></p><progress value={agent.completed} max={agent.target}/></div></Tooltip></CircleMarker>)}</MapContainer><div className="mapAttribution">Imagem de satélite · Esri World Imagery</div></div></div><div className="mapImportNote"><CheckCircle2/><span><b>Coordenadas importadas sem alterar os cadastros existentes.</b> O vínculo utilizou nome + CEP e, quando necessário, somente CEP ou nome atual.</span></div></div>}
+function CoverageMap(){const mapRef=useRef<HTMLDivElement>(null);const [query,setQuery]=useState('');const [showStreets,setShowStreets]=useState(true);const [showLines,setShowLines]=useState(false);const agents=useMemo<AgentMapPoint[]>(()=>{try{return JSON.parse(localStorage.getItem('pulso-agent-locations')||'[]')}catch{return[]}},[]);const filteredStreets=streetCoordinates.filter(street=>`${street.name} ${street.neighborhood} ${street.district}`.toLocaleLowerCase('pt-BR').includes(query.toLocaleLowerCase('pt-BR')));const center=useMemo<[number,number]>(()=>{const valid=streetCoordinates.filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lng));return [valid.reduce((s,x)=>s+x.lat,0)/valid.length,valid.reduce((s,x)=>s+x.lng,0)/valid.length]},[]);const fullscreen=()=>{if(!document.fullscreenElement)mapRef.current?.requestFullscreen();else document.exitFullscreen()};return <div className="content coveragePage"><PageHeader eyebrow="OPERAÇÃO TERRITORIAL" title="Mapa de cobertura" description="Ruas georreferenciadas, agentes em campo e andamento da coleta." actions={<div className="coverageMetrics"><span><b>{streetCoordinates.length}</b> ruas com coordenadas</span><span><b>{agents.length}</b> agentes com GPS</span></div>} /><div className="mapWorkspace"><aside className="mapSide"><label><Search/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar rua ou bairro..."/></label><div className="mapLayerTitle"><Layers3/> Camadas do mapa</div><button className={showStreets?'on':''} onClick={()=>setShowStreets(!showStreets)}><i className="layerDot streetDot"/><span><b>Pontos centrais das ruas</b><small>{filteredStreets.length} visíveis</small></span></button><button className={showLines?'on':''} onClick={()=>setShowLines(!showLines)}><i className="layerDot lineDot"/><span><b>Traçado das ruas</b><small>Geometria importada do KML</small></span></button><button className="on"><i className="layerDot agentDot"/><span><b>Agentes em campo</b><small>{agents.length?`${agents.length} com GPS ativo`:'Aguardando check-ins reais'}</small></span></button><div className="mapStatus"><ShieldCheck/><p><b>Base geográfica vinculada</b><span>633 de 636 ruas receberam latitude e longitude. Três ficaram pendentes para revisão manual.</span></p></div>{!agents.length&&<div className="noAgentGps"><MapPin/><p><b>Nenhum agente com localização ativa</b><span>Os cartões aparecerão ao passar o mouse sobre os pontos após o primeiro check-in GPS.</span></p></div>}</aside><div className="leafletShell" ref={mapRef}><button className="expandMap" onClick={fullscreen}><Maximize2/> Expandir mapa</button><MapContainer center={center} zoom={14} className="coverageLeaflet" zoomControl={true}><MapResize/><TileLayer attribution='Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics' url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"/>{showLines&&filteredStreets.map(street=><Polyline key={`line-${street.id}`} positions={street.line.map(point=>[point[1],point[0]] as [number,number])} pathOptions={{color:'#e3b341',weight:2,opacity:.78}}/>)}{showStreets&&filteredStreets.map(street=><CircleMarker key={street.id} center={[street.lat,street.lng]} radius={3} pathOptions={{color:'#201d17',fillColor:'#e7b746',fillOpacity:.9,weight:1}}><Tooltip direction="top" offset={[0,-4]} opacity={1}><div className="streetTooltip"><small>LOGRADOURO</small><b>{street.name}</b><span>{street.neighborhood||street.district} · {street.cep||'CEP não informado'}</span><em>{street.lat.toFixed(6)}, {street.lng.toFixed(6)}</em></div></Tooltip></CircleMarker>)}{agents.map(agent=><CircleMarker key={agent.id} center={[agent.lat,agent.lng]} radius={9} pathOptions={{color:'#fff',fillColor:'#45a060',fillOpacity:1,weight:3}}><Tooltip direction="top" offset={[0,-8]} opacity={1}><div className="agentTooltip"><div><i>{agent.name.split(' ').map(x=>x[0]).join('').slice(0,2)}</i><span><small>AGENTE EM CAMPO</small><b>{agent.name}</b></span></div><p><span>Localidade <b>{agent.area}</b></span><span>Andamento <b>{agent.completed} de {agent.target}</b></span><span>Status <b>{agent.status}</b></span><span>Atualizado <b>{agent.updatedAt}</b></span></p><progress value={agent.completed} max={agent.target}/></div></Tooltip></CircleMarker>)}</MapContainer><div className="mapAttribution">Imagem de satélite · Esri World Imagery</div></div></div><div className="mapImportNote"><CheckCircle2/><span><b>Coordenadas importadas sem alterar os cadastros existentes.</b> O vínculo utilizou nome + CEP e, quando necessário, somente CEP ou nome atual.</span></div></div>}
 
 const streetNames = Array.from(
   new Set(streetCoordinates.map((s) => s.name).filter(Boolean)),

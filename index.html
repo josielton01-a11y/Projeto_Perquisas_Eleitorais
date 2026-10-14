@@ -12,6 +12,17 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" href="/favicon.png" />
     <title>Pulso — Gestão de Pesquisas</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("pulso-theme");
+          var theme = stored === "light" || stored === "dark"
+            ? stored
+            : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
